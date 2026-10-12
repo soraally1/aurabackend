@@ -1,0 +1,14 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*serviceAccount*.json
+*-firebase-adminsdk-*.json
+
+# Build / tooling
+/bin/
+*.exe
+*.test
+*.out
+.vercel
+.DS_Store
