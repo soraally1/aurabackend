@@ -35,20 +35,33 @@ func newRouter() http.Handler {
 	mux.HandleFunc("GET /api", handlers.Root)
 	mux.HandleFunc("GET /api/index", handlers.Root)
 	mux.HandleFunc("GET /api/health", handlers.Health)
+	mux.HandleFunc("GET /health", handlers.Health)
 
 	mux.Handle("POST /api/auth/register", public(handlers.Register))
+	mux.Handle("POST /auth/register", public(handlers.Register))
+
 	mux.Handle("POST /api/auth/login", public(handlers.Login))
+	mux.Handle("POST /auth/login", public(handlers.Login))
+
 	mux.Handle("POST /api/auth/refresh", public(handlers.Refresh))
+	mux.Handle("POST /auth/refresh", public(handlers.Refresh))
+
 	mux.Handle("GET /api/auth/me", protected(handlers.Me))
+	mux.Handle("GET /auth/me", protected(handlers.Me))
+
 	mux.Handle("PUT /api/auth/profile", protected(handlers.UpdateProfile))
+	mux.Handle("PUT /auth/profile", protected(handlers.UpdateProfile))
 	mux.Handle("PATCH /api/auth/profile", protected(handlers.UpdateProfile))
+	mux.Handle("PATCH /auth/profile", protected(handlers.UpdateProfile))
+
 	mux.Handle("POST /api/auth/logout", protected(handlers.Logout))
+	mux.Handle("POST /auth/logout", protected(handlers.Logout))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "Route not found")
 	})
 
-	return middleware.Recover(middleware.CORS(allowedOrigins(), mux))
+	return middleware.Recover(middleware.CORS(allowedOrigins(), middleware.RewritePath(mux)))
 }
 
 // public injects Firebase clients into a handler.

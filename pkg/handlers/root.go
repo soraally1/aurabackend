@@ -17,6 +17,7 @@ func Root(w http.ResponseWriter, r *http.Request) {
 			"health":   "GET /api/health",
 			"register": "POST /api/auth/register",
 			"login":    "POST /api/auth/login",
+			"profile":  "PUT /api/auth/profile",
 			"refresh":  "POST /api/auth/refresh",
 			"me":       "GET /api/auth/me",
 			"logout":   "POST /api/auth/logout",

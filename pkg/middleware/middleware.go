@@ -5,6 +5,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -76,7 +77,7 @@ func CORS(allowed []string, next http.Handler) http.Handler {
 		}
 
 		if r.Method == http.MethodOptions {
-			h.Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 			h.Set("Access-Control-Max-Age", "86400")
 			w.WriteHeader(http.StatusNoContent)
@@ -84,6 +85,60 @@ func CORS(allowed []string, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// RewritePath restores the original request path on serverless platforms like Vercel.
+func RewritePath(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ResolvePath(r)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// ResolvePath extracts the original path from __path query param, x-forwarded-uri,
+// or x-matched-path, ensuring router matching succeeds.
+func ResolvePath(r *http.Request) {
+	// 1. Query parameter __path from vercel.json rewrite: /(.*) -> /api/index?__path=/$1
+	if p := r.URL.Query().Get("__path"); p != "" {
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p
+		}
+		setPath(r, p)
+
+		// Clean up __path query parameter
+		q := r.URL.Query()
+		q.Del("__path")
+		r.URL.RawQuery = q.Encode()
+		return
+	}
+
+	// 2. Fallback to x-forwarded-uri header (Vercel proxy/edge original URI)
+	if p := r.Header.Get("x-forwarded-uri"); p != "" {
+		if u, err := url.Parse(p); err == nil && u.Path != "" {
+			setPath(r, u.Path)
+			return
+		}
+		setPath(r, p)
+		return
+	}
+
+	// 3. Fallback to x-matched-path only if valid and not an internal function entrypoint
+	if p := r.Header.Get("x-matched-path"); p != "" {
+		if p != "/api/index" && p != "/api" && p != "/go" && p != "/" {
+			if u, err := url.Parse(p); err == nil && u.Path != "" {
+				setPath(r, u.Path)
+				return
+			}
+			setPath(r, p)
+			return
+		}
+	}
+}
+
+func setPath(r *http.Request, p string) {
+	r.URL.Path = p
+	r.URL.RawPath = p
+	r.RequestURI = p
 }
 
 // Recover turns panics into 500 responses instead of crashing the function.
