@@ -31,6 +31,9 @@ func Handler() http.Handler {
 func newRouter() http.Handler {
 	mux := http.NewServeMux()
 
+	mux.HandleFunc("GET /{$}", handlers.Root)
+	mux.HandleFunc("GET /api", handlers.Root)
+	mux.HandleFunc("GET /api/index", handlers.Root)
 	mux.HandleFunc("GET /api/health", handlers.Health)
 
 	mux.Handle("POST /api/auth/register", public(handlers.Register))
