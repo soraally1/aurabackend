@@ -89,6 +89,7 @@ All responses use this envelope:
   "password": "supersecret",
   "usia": 25,
   "tinggi_badan": 170,
+  "berat_badan": 65,
   "waktu_di_jalan": 2
 }
 ```
@@ -119,6 +120,7 @@ Update satu atau lebih data profil:
   "name": "Daffa",
   "usia": 26,
   "tinggi_badan": 172,
+  "berat_badan": 67,
   "waktu_di_jalan": 1.5
 }
 ```
@@ -142,6 +144,7 @@ curl -X POST $BASE/api/auth/register -H 'Content-Type: application/json' \
     "password": "supersecret",
     "usia": 25,
     "tinggi_badan": 170,
+    "berat_badan": 65,
     "waktu_di_jalan": 2
   }'
 
@@ -153,5 +156,5 @@ curl $BASE/api/auth/me -H "Authorization: Bearer $TOKEN"
 # Update profil
 curl -X PUT $BASE/api/auth/profile -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $TOKEN" \
-  -d '{"usia": 26, "tinggi_badan": 171, "waktu_di_jalan": 1.5}'
+  -d '{"usia": 26, "tinggi_badan": 171, "berat_badan": 66, "waktu_di_jalan": 1.5}'
 ```

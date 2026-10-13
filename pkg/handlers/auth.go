@@ -29,6 +29,7 @@ type registerRequest struct {
 	Password     string   `json:"password"`
 	Usia         *int     `json:"usia"`
 	TinggiBadan  *float64 `json:"tinggi_badan"`
+	BeratBadan   *float64 `json:"berat_badan"`
 	WaktuDiJalan *float64 `json:"waktu_di_jalan"`
 }
 
@@ -36,6 +37,7 @@ type updateProfileRequest struct {
 	Name         *string  `json:"name"`
 	Usia         *int     `json:"usia"`
 	TinggiBadan  *float64 `json:"tinggi_badan"`
+	BeratBadan   *float64 `json:"berat_badan"`
 	WaktuDiJalan *float64 `json:"waktu_di_jalan"`
 }
 
@@ -94,6 +96,7 @@ func Register(w http.ResponseWriter, r *http.Request, c *firebase.Clients) {
 		Name:         req.Name,
 		Usia:         *req.Usia,
 		TinggiBadan:  *req.TinggiBadan,
+		BeratBadan:   *req.BeratBadan,
 		WaktuDiJalan: *req.WaktuDiJalan,
 	}
 	store := users.NewStore(c.Firestore, c.Config.UsersCollection)
@@ -236,6 +239,9 @@ func UpdateProfile(w http.ResponseWriter, r *http.Request, c *firebase.Clients) 
 	if req.TinggiBadan != nil {
 		updates["tinggi_badan"] = *req.TinggiBadan
 	}
+	if req.BeratBadan != nil {
+		updates["berat_badan"] = *req.BeratBadan
+	}
 	if req.WaktuDiJalan != nil {
 		updates["waktu_di_jalan"] = *req.WaktuDiJalan
 	}
@@ -314,6 +320,10 @@ func validateRegister(req registerRequest) string {
 		return "tinggi_badan is required"
 	case *req.TinggiBadan <= 0 || *req.TinggiBadan > 300:
 		return "tinggi_badan must be between 1 and 300 cm"
+	case req.BeratBadan == nil:
+		return "berat_badan is required"
+	case *req.BeratBadan <= 0 || *req.BeratBadan > 500:
+		return "berat_badan must be between 1 and 500 kg"
 	case req.WaktuDiJalan == nil:
 		return "waktu_di_jalan is required"
 	case *req.WaktuDiJalan < 0 || *req.WaktuDiJalan > 24:
@@ -323,7 +333,7 @@ func validateRegister(req registerRequest) string {
 }
 
 func validateUpdateProfile(req updateProfileRequest) string {
-	if req.Name == nil && req.Usia == nil && req.TinggiBadan == nil && req.WaktuDiJalan == nil {
+	if req.Name == nil && req.Usia == nil && req.TinggiBadan == nil && req.BeratBadan == nil && req.WaktuDiJalan == nil {
 		return "at least one field must be provided"
 	}
 	if req.Name != nil {
@@ -343,6 +353,11 @@ func validateUpdateProfile(req updateProfileRequest) string {
 	if req.TinggiBadan != nil {
 		if *req.TinggiBadan <= 0 || *req.TinggiBadan > 300 {
 			return "tinggi_badan must be between 1 and 300 cm"
+		}
+	}
+	if req.BeratBadan != nil {
+		if *req.BeratBadan <= 0 || *req.BeratBadan > 500 {
+			return "berat_badan must be between 1 and 500 kg"
 		}
 	}
 	if req.WaktuDiJalan != nil {

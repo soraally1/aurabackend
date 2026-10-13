@@ -22,6 +22,7 @@ type User struct {
 	Name         string     `firestore:"name" json:"name"`
 	Usia         int        `firestore:"usia" json:"usia"`
 	TinggiBadan  float64    `firestore:"tinggi_badan" json:"tinggi_badan"`
+	BeratBadan   float64    `firestore:"berat_badan" json:"berat_badan"`
 	WaktuDiJalan float64    `firestore:"waktu_di_jalan" json:"waktu_di_jalan"`
 	CreatedAt    time.Time  `firestore:"createdAt" json:"createdAt"`
 	UpdatedAt    time.Time  `firestore:"updatedAt" json:"updatedAt"`
