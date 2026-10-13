@@ -56,6 +56,13 @@ func TestHandlerRouting(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
+			name:       "Vercel rewrite via __path even if x-matched-path is /api/index",
+			method:     http.MethodGet,
+			target:     "/api/index?__path=/api/health",
+			headers:    map[string]string{"x-matched-path": "/api/index"},
+			wantStatus: http.StatusOK,
+		},
+		{
 			name:       "Unknown route returns 404",
 			method:     http.MethodGet,
 			target:     "/api/nonexistent",
