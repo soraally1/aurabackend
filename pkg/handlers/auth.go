@@ -24,9 +24,19 @@ const (
 )
 
 type registerRequest struct {
-	Name     string `json:"name"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Name         string   `json:"name"`
+	Email        string   `json:"email"`
+	Password     string   `json:"password"`
+	Usia         *int     `json:"usia"`
+	TinggiBadan  *float64 `json:"tinggi_badan"`
+	WaktuDiJalan *float64 `json:"waktu_di_jalan"`
+}
+
+type updateProfileRequest struct {
+	Name         *string  `json:"name"`
+	Usia         *int     `json:"usia"`
+	TinggiBadan  *float64 `json:"tinggi_badan"`
+	WaktuDiJalan *float64 `json:"waktu_di_jalan"`
 }
 
 type loginRequest struct {
@@ -78,7 +88,14 @@ func Register(w http.ResponseWriter, r *http.Request, c *firebase.Clients) {
 		return
 	}
 
-	profile := &users.User{UID: record.UID, Email: req.Email, Name: req.Name}
+	profile := &users.User{
+		UID:          record.UID,
+		Email:        req.Email,
+		Name:         req.Name,
+		Usia:         *req.Usia,
+		TinggiBadan:  *req.TinggiBadan,
+		WaktuDiJalan: *req.WaktuDiJalan,
+	}
 	store := users.NewStore(c.Firestore, c.Config.UsersCollection)
 	if err := store.Create(ctx, profile); err != nil {
 		log.Printf("register: create profile for %s: %v", record.UID, err)
@@ -180,6 +197,65 @@ func Me(w http.ResponseWriter, r *http.Request, c *firebase.Clients) {
 	httpx.OK(w, http.StatusOK, map[string]any{"user": profile})
 }
 
+// UpdateProfile updates the authenticated user's profile.
+//
+// PUT /api/auth/profile  (Authorization: Bearer <idToken>)
+func UpdateProfile(w http.ResponseWriter, r *http.Request, c *firebase.Clients) {
+	var req updateProfileRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_BODY", err.Error())
+		return
+	}
+
+	if msg := validateUpdateProfile(req); msg != "" {
+		httpx.Error(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", msg)
+		return
+	}
+
+	uid := middleware.UID(r.Context())
+	store := users.NewStore(c.Firestore, c.Config.UsersCollection)
+
+	// Ensure profile exists in Firestore (backfilling if created externally).
+	if _, err := loadOrBackfillProfile(r.Context(), c, store, uid); err != nil {
+		log.Printf("update profile: load/backfill %s: %v", uid, err)
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL", "Could not load profile")
+		return
+	}
+
+	updates := make(map[string]any)
+	if req.Name != nil {
+		cleanName := strings.TrimSpace(*req.Name)
+		updates["name"] = cleanName
+		if _, err := c.Auth.UpdateUser(r.Context(), uid, (&auth.UserToUpdate{}).DisplayName(cleanName)); err != nil {
+			log.Printf("update profile: sync auth displayName for %s: %v", uid, err)
+		}
+	}
+	if req.Usia != nil {
+		updates["usia"] = *req.Usia
+	}
+	if req.TinggiBadan != nil {
+		updates["tinggi_badan"] = *req.TinggiBadan
+	}
+	if req.WaktuDiJalan != nil {
+		updates["waktu_di_jalan"] = *req.WaktuDiJalan
+	}
+
+	if err := store.Update(r.Context(), uid, updates); err != nil {
+		log.Printf("update profile: store update %s: %v", uid, err)
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL", "Could not update profile")
+		return
+	}
+
+	profile, err := store.Get(r.Context(), uid)
+	if err != nil {
+		log.Printf("update profile: get updated profile %s: %v", uid, err)
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL", "Could not load updated profile")
+		return
+	}
+
+	httpx.OK(w, http.StatusOK, map[string]any{"user": profile})
+}
+
 // Logout revokes all refresh tokens for the user, signing them out everywhere.
 // Existing ID tokens are rejected by the auth middleware's revocation check.
 //
@@ -230,6 +306,49 @@ func validateRegister(req registerRequest) string {
 		return "password must be at least 8 characters"
 	case len(req.Password) > maxPasswordLen:
 		return "password must be at most 128 characters"
+	case req.Usia == nil:
+		return "usia is required"
+	case *req.Usia <= 0 || *req.Usia > 150:
+		return "usia must be between 1 and 150"
+	case req.TinggiBadan == nil:
+		return "tinggi_badan is required"
+	case *req.TinggiBadan <= 0 || *req.TinggiBadan > 300:
+		return "tinggi_badan must be between 1 and 300 cm"
+	case req.WaktuDiJalan == nil:
+		return "waktu_di_jalan is required"
+	case *req.WaktuDiJalan < 0 || *req.WaktuDiJalan > 24:
+		return "waktu_di_jalan must be between 0 and 24 hours"
+	}
+	return ""
+}
+
+func validateUpdateProfile(req updateProfileRequest) string {
+	if req.Name == nil && req.Usia == nil && req.TinggiBadan == nil && req.WaktuDiJalan == nil {
+		return "at least one field must be provided"
+	}
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			return "name cannot be empty"
+		}
+		if utf8.RuneCountInString(name) > maxNameLen {
+			return "name must be at most 100 characters"
+		}
+	}
+	if req.Usia != nil {
+		if *req.Usia <= 0 || *req.Usia > 150 {
+			return "usia must be between 1 and 150"
+		}
+	}
+	if req.TinggiBadan != nil {
+		if *req.TinggiBadan <= 0 || *req.TinggiBadan > 300 {
+			return "tinggi_badan must be between 1 and 300 cm"
+		}
+	}
+	if req.WaktuDiJalan != nil {
+		if *req.WaktuDiJalan < 0 || *req.WaktuDiJalan > 24 {
+			return "waktu_di_jalan must be between 0 and 24 hours"
+		}
 	}
 	return ""
 }

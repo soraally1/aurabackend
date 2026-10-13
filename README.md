@@ -83,7 +83,14 @@ All responses use this envelope:
 
 ### `POST /api/auth/register`
 ```json
-{ "name": "Daffa", "email": "daffa@example.com", "password": "supersecret" }
+{
+  "name": "Daffa",
+  "email": "daffa@example.com",
+  "password": "supersecret",
+  "usia": 25,
+  "tinggi_badan": 170,
+  "waktu_di_jalan": 2
+}
 ```
 `201` → `{ user, tokens: { idToken, refreshToken, expiresIn } }`
 Errors: `422 VALIDATION_ERROR`, `409 EMAIL_EXISTS`
@@ -104,6 +111,20 @@ Errors: `401 INVALID_CREDENTIALS`, `403 USER_DISABLED`, `429 TOO_MANY_ATTEMPTS`
 ### `GET /api/auth/me`
 Header `Authorization: Bearer <idToken>` → `200 { user }`
 
+### `PUT /api/auth/profile`
+Header `Authorization: Bearer <idToken>`
+Update satu atau lebih data profil:
+```json
+{
+  "name": "Daffa",
+  "usia": 26,
+  "tinggi_badan": 172,
+  "waktu_di_jalan": 1.5
+}
+```
+`200` → `{ user }`
+Errors: `401 INVALID_REFRESH_TOKEN / UNAUTHORIZED`, `422 VALIDATION_ERROR`
+
 ### `POST /api/auth/logout`
 Header `Authorization: Bearer <idToken>` → revokes all of the user's sessions.
 
@@ -115,10 +136,22 @@ Liveness check.
 ```bash
 BASE=http://localhost:8080
 curl -X POST $BASE/api/auth/register -H 'Content-Type: application/json' \
-  -d '{"name":"Daffa","email":"daffa@example.com","password":"supersecret"}'
+  -d '{
+    "name": "Daffa",
+    "email": "daffa@example.com",
+    "password": "supersecret",
+    "usia": 25,
+    "tinggi_badan": 170,
+    "waktu_di_jalan": 2
+  }'
 
 TOKEN=$(curl -s -X POST $BASE/api/auth/login -H 'Content-Type: application/json' \
   -d '{"email":"daffa@example.com","password":"supersecret"}' | jq -r .data.tokens.idToken)
 
 curl $BASE/api/auth/me -H "Authorization: Bearer $TOKEN"
+
+# Update profil
+curl -X PUT $BASE/api/auth/profile -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"usia": 26, "tinggi_badan": 171, "waktu_di_jalan": 1.5}'
 ```

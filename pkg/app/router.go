@@ -40,6 +40,8 @@ func newRouter() http.Handler {
 	mux.Handle("POST /api/auth/login", public(handlers.Login))
 	mux.Handle("POST /api/auth/refresh", public(handlers.Refresh))
 	mux.Handle("GET /api/auth/me", protected(handlers.Me))
+	mux.Handle("PUT /api/auth/profile", protected(handlers.UpdateProfile))
+	mux.Handle("PATCH /api/auth/profile", protected(handlers.UpdateProfile))
 	mux.Handle("POST /api/auth/logout", protected(handlers.Logout))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

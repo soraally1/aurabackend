@@ -17,12 +17,15 @@ var ErrNotFound = errors.New("user profile not found")
 // User is the profile document stored at <collection>/<uid>.
 // Credentials are never stored here; Firebase Auth owns them.
 type User struct {
-	UID         string     `firestore:"uid" json:"uid"`
-	Email       string     `firestore:"email" json:"email"`
-	Name        string     `firestore:"name" json:"name"`
-	CreatedAt   time.Time  `firestore:"createdAt" json:"createdAt"`
-	UpdatedAt   time.Time  `firestore:"updatedAt" json:"updatedAt"`
-	LastLoginAt *time.Time `firestore:"lastLoginAt,omitempty" json:"lastLoginAt,omitempty"`
+	UID          string     `firestore:"uid" json:"uid"`
+	Email        string     `firestore:"email" json:"email"`
+	Name         string     `firestore:"name" json:"name"`
+	Usia         int        `firestore:"usia" json:"usia"`
+	TinggiBadan  float64    `firestore:"tinggi_badan" json:"tinggi_badan"`
+	WaktuDiJalan float64    `firestore:"waktu_di_jalan" json:"waktu_di_jalan"`
+	CreatedAt    time.Time  `firestore:"createdAt" json:"createdAt"`
+	UpdatedAt    time.Time  `firestore:"updatedAt" json:"updatedAt"`
+	LastLoginAt  *time.Time `firestore:"lastLoginAt,omitempty" json:"lastLoginAt,omitempty"`
 }
 
 // Store reads and writes user profiles.
@@ -65,3 +68,11 @@ func (s *Store) TouchLogin(ctx context.Context, uid string) (time.Time, error) {
 	_, err := s.col.Doc(uid).Set(ctx, map[string]any{"lastLoginAt": now}, firestore.MergeAll)
 	return now, err
 }
+
+// Update updates profile fields in Firestore.
+func (s *Store) Update(ctx context.Context, uid string, updates map[string]any) error {
+	updates["updatedAt"] = time.Now().UTC()
+	_, err := s.col.Doc(uid).Set(ctx, updates, firestore.MergeAll)
+	return err
+}
+
