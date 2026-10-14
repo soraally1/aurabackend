@@ -57,6 +57,21 @@ func newRouter() http.Handler {
 	mux.Handle("POST /api/auth/logout", protected(handlers.Logout))
 	mux.Handle("POST /auth/logout", protected(handlers.Logout))
 
+	// Environmental Zones & 1-Week Impact Analysis
+	mux.Handle("GET /api/zones/nearby", public(handlers.NearbyZones))
+	mux.Handle("GET /zones/nearby", public(handlers.NearbyZones))
+
+	mux.Handle("GET /api/zones/analysis", public(handlers.ZoneImpactAnalysis))
+	mux.Handle("GET /zones/analysis", public(handlers.ZoneImpactAnalysis))
+	mux.Handle("POST /api/zones/analysis", public(handlers.ZoneImpactAnalysis))
+	mux.Handle("POST /zones/analysis", public(handlers.ZoneImpactAnalysis))
+
+	mux.Handle("POST /api/zones/seed", public(handlers.SeedZones))
+	mux.Handle("POST /zones/seed", public(handlers.SeedZones))
+
+	mux.Handle("POST /api/zones", protected(handlers.CreateZone))
+	mux.Handle("POST /zones", protected(handlers.CreateZone))
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "Route not found")
 	})

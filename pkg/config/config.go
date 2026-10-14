@@ -23,6 +23,8 @@ type Config struct {
 	FirestoreDatabaseID string
 	// UsersCollection is the Firestore collection where user profiles are stored.
 	UsersCollection string
+	// ZonesCollection is the Firestore collection where traffic and pollution zones are stored.
+	ZonesCollection string
 }
 
 // Load reads configuration from the environment.
@@ -35,6 +37,7 @@ type Config struct {
 //   - FIREBASE_PROJECT_ID:    overrides the project_id inside the service account
 //   - FIRESTORE_DATABASE_ID:  defaults to "(default)"
 //   - USERS_COLLECTION:       defaults to "users"
+//   - ZONES_COLLECTION:       defaults to "environmental_zones"
 func Load() (*Config, error) {
 	rawKey := strings.TrimSpace(os.Getenv("FIREBASE_SERVICE_ACCOUNT_KEY"))
 	if rawKey == "" {
@@ -69,6 +72,7 @@ func Load() (*Config, error) {
 		WebAPIKey:           apiKey,
 		FirestoreDatabaseID: getEnv("FIRESTORE_DATABASE_ID", "(default)"),
 		UsersCollection:     getEnv("USERS_COLLECTION", "users"),
+		ZonesCollection:     getEnv("ZONES_COLLECTION", "environmental_zones"),
 	}, nil
 }
 
