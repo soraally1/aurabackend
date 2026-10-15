@@ -27,6 +27,10 @@ type Config struct {
 	ZonesCollection string
 	// HospitalsCollection is the Firestore collection where hospital records are stored.
 	HospitalsCollection string
+	// GroqAPIKey is the API key for Groq AI inference (Llama-3.3-70b-versatile).
+	GroqAPIKey string
+	// MobilityCollection is the Firestore collection where mobility and pollution analyses are stored.
+	MobilityCollection string
 }
 
 // Load reads configuration from the environment.
@@ -41,6 +45,8 @@ type Config struct {
 //   - USERS_COLLECTION:       defaults to "users"
 //   - ZONES_COLLECTION:       defaults to "environmental_zones"
 //   - HOSPITALS_COLLECTION:   defaults to "hospitals"
+//   - GROQ_API_KEY:           Groq API Key
+//   - MOBILITY_COLLECTION:    defaults to "daily_mobility"
 func Load() (*Config, error) {
 	rawKey := strings.TrimSpace(os.Getenv("FIREBASE_SERVICE_ACCOUNT_KEY"))
 	if rawKey == "" {
@@ -77,6 +83,8 @@ func Load() (*Config, error) {
 		UsersCollection:     getEnv("USERS_COLLECTION", "users"),
 		ZonesCollection:     getEnv("ZONES_COLLECTION", "environmental_zones"),
 		HospitalsCollection: getEnv("HOSPITALS_COLLECTION", "hospitals"),
+		GroqAPIKey:          strings.TrimSpace(os.Getenv("GROQ_API_KEY")),
+		MobilityCollection:  getEnv("MOBILITY_COLLECTION", "daily_mobility"),
 	}, nil
 }
 

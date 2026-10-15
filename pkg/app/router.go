@@ -96,6 +96,15 @@ func newRouter() http.Handler {
 	mux.Handle("POST /api/hospitals/seed", public(handlers.SeedHospitals))
 	mux.Handle("POST /hospitals/seed", public(handlers.SeedHospitals))
 
+	// Mobility Tracking & Daily Pollution Exposure Analysis (Groq Llama-3.3-70b-versatile)
+	mux.Handle("POST /api/v1/mobility/batch", public(handlers.ProcessMobilityBatch))
+	mux.Handle("POST /api/mobility/batch", public(handlers.ProcessMobilityBatch))
+	mux.Handle("POST /mobility/batch", public(handlers.ProcessMobilityBatch))
+
+	mux.Handle("GET /api/v1/mobility/daily-analysis", public(handlers.GetDailyAnalysis))
+	mux.Handle("GET /api/mobility/daily-analysis", public(handlers.GetDailyAnalysis))
+	mux.Handle("GET /mobility/daily-analysis", public(handlers.GetDailyAnalysis))
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "Route not found")
 	})

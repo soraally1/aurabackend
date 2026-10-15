@@ -265,3 +265,72 @@ Fitur Seeder:
 - Fallback otomatis ke Overpass API (OpenStreetMap) dan dataset terkurasi Semarang.
 - Strict blacklist filter: otomatis mengecualikan Puskesmas, Klinik, Apotek, dan Lab.
 
+---
+
+## Mobility Tracking & Daily Exposure Analysis (Groq Llama-3.3-70b-versatile)
+
+### 1. Kirim Batch Waypoint Harian
+- **Method & Path:** `POST /api/v1/mobility/batch`
+- **Headers:** `Content-Type: application/json`, opsional `Authorization: Bearer <idToken>`
+- **Request Body JSON:**
+```json
+{
+  "user_id": "user-123",
+  "date": "2026-10-15",
+  "waypoints": [
+    {
+      "latitude": -6.9934,
+      "longitude": 110.4087,
+      "timestamp": "2026-10-15T08:00:00Z",
+      "duration_minutes": 180,
+      "is_stay": true
+    },
+    {
+      "latitude": -6.9893,
+      "longitude": 110.4229,
+      "timestamp": "2026-10-15T11:15:00Z",
+      "duration_minutes": 15,
+      "is_stay": false
+    }
+  ]
+}
+```
+- **Response JSON:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "user-123_2026-10-15",
+    "user_id": "user-123",
+    "date": "2026-10-15",
+    "stats": {
+      "total_indoor_minutes": 180.0,
+      "total_outdoor_minutes": 15.0,
+      "average_outdoor_aqi": 132.0,
+      "average_outdoor_pm25": 48.5,
+      "max_aqi": 132,
+      "worst_area_name": "Simpang Lima Semarang",
+      "worst_area_aqi": 132,
+      "waypoints_processed": 2
+    },
+    "analysis": {
+      "impact_score": 45.2,
+      "risk_level": "Sedang",
+      "summary": "Paparan polusi Anda hari ini berada pada tingkat sedang setelah beraktivitas luar ruangan selama 15 menit di sekitar Simpang Lima Semarang.",
+      "doctor_diagnosis": "Terdeteksi akumulasi partikulat halus (PM2.5 rata-rata 48.5 µg/m³) akibat perjalanan luar ruangan...",
+      "recommendations": [
+        "Gunakan masker standar medis atau KF94 saat bepergian melintasi jalan padat kendaraan.",
+        "Bilas wajah dan bersihkan rongga hidung dengan larutan saline steril setelah sampai di rumah."
+      ]
+    }
+  }
+}
+```
+
+### 2. Ambil Hasil Analisis Harian
+- **Method & Path:** `GET /api/v1/mobility/daily-analysis?date=YYYY-MM-DD`
+- **Query Params:**
+  - `date`: `YYYY-MM-DD` (optional, default hari ini)
+  - `user_id`: ID pengguna (optional jika menggunakan token `Authorization: Bearer <token>`)
+
+
