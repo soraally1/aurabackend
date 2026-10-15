@@ -68,6 +68,12 @@ func TestHandlerRouting(t *testing.T) {
 			target:     "/api/nonexistent",
 			wantStatus: http.StatusNotFound,
 		},
+		{
+			name:       "Google auth route exists and is routed",
+			method:     http.MethodPost,
+			target:     "/api/auth/google",
+			wantStatus: http.StatusInternalServerError, // Expected without Firebase env vars in test
+		},
 	}
 
 	for _, tt := range tests {

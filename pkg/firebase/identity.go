@@ -16,21 +16,28 @@ import (
 // The Admin SDK cannot verify a user's password, so login goes through the
 // Firebase Auth (Identity Toolkit) REST API using the project's Web API key.
 const (
-	signInURL  = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
-	refreshURL = "https://securetoken.googleapis.com/v1/token"
+	signInURL        = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
+	signInWithIdpURL = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp"
+	refreshURL       = "https://securetoken.googleapis.com/v1/token"
 )
 
 // IdentityClient talks to the Firebase Auth REST API.
 type IdentityClient struct {
-	apiKey string
-	http   *http.Client
+	apiKey           string
+	http             *http.Client
+	signInURL        string
+	signInWithIdpURL string
+	refreshURL       string
 }
 
 // NewIdentityClient creates an IdentityClient.
 func NewIdentityClient(apiKey string) *IdentityClient {
 	return &IdentityClient{
-		apiKey: apiKey,
-		http:   &http.Client{Timeout: 10 * time.Second},
+		apiKey:           apiKey,
+		http:             &http.Client{Timeout: 10 * time.Second},
+		signInURL:        signInURL,
+		signInWithIdpURL: signInWithIdpURL,
+		refreshURL:       refreshURL,
 	}
 }
 
@@ -41,11 +48,12 @@ type Tokens struct {
 	ExpiresIn    int    `json:"expiresIn"` // seconds
 }
 
-// SignInResult is the outcome of a successful password sign-in.
+// SignInResult is the outcome of a successful sign-in.
 type SignInResult struct {
-	UID    string
-	Email  string
-	Tokens Tokens
+	UID         string
+	Email       string
+	DisplayName string
+	Tokens      Tokens
 }
 
 // IdentityError is an error returned by the Firebase Auth REST API,
@@ -77,17 +85,61 @@ func (c *IdentityClient) SignInWithPassword(ctx context.Context, email, password
 	var out struct {
 		LocalID      string `json:"localId"`
 		Email        string `json:"email"`
+		DisplayName  string `json:"displayName"`
 		IDToken      string `json:"idToken"`
 		RefreshToken string `json:"refreshToken"`
 		ExpiresIn    string `json:"expiresIn"`
 	}
-	if err := c.do(ctx, signInURL, "application/json", bytes.NewReader(body), &out); err != nil {
+	if err := c.do(ctx, c.signInURL, "application/json", bytes.NewReader(body), &out); err != nil {
 		return nil, err
 	}
 
 	return &SignInResult{
-		UID:   out.LocalID,
-		Email: out.Email,
+		UID:         out.LocalID,
+		Email:       out.Email,
+		DisplayName: out.DisplayName,
+		Tokens: Tokens{
+			IDToken:      out.IDToken,
+			RefreshToken: out.RefreshToken,
+			ExpiresIn:    atoiOr(out.ExpiresIn, 3600),
+		},
+	}, nil
+}
+
+// SignInWithGoogle exchanges a Google ID token or access token with Firebase
+// Identity Toolkit (accounts:signInWithIdp) for Firebase tokens and user info.
+func (c *IdentityClient) SignInWithGoogle(ctx context.Context, idToken, accessToken string) (*SignInResult, error) {
+	var postBodyParts []string
+	if idToken != "" {
+		postBodyParts = append(postBodyParts, "id_token="+url.QueryEscape(idToken))
+	}
+	if accessToken != "" {
+		postBodyParts = append(postBodyParts, "access_token="+url.QueryEscape(accessToken))
+	}
+	postBodyParts = append(postBodyParts, "providerId=google.com")
+
+	body, _ := json.Marshal(map[string]any{
+		"postBody":          strings.Join(postBodyParts, "&"),
+		"requestUri":        "http://localhost",
+		"returnSecureToken": true,
+	})
+
+	var out struct {
+		LocalID      string `json:"localId"`
+		Email        string `json:"email"`
+		DisplayName  string `json:"displayName"`
+		IDToken      string `json:"idToken"`
+		RefreshToken string `json:"refreshToken"`
+		ExpiresIn    string `json:"expiresIn"`
+	}
+	if err := c.do(ctx, c.signInWithIdpURL, "application/json", bytes.NewReader(body), &out); err != nil {
+		return nil, err
+	}
+
+	return &SignInResult{
+		UID:         out.LocalID,
+		Email:       out.Email,
+		DisplayName: out.DisplayName,
 		Tokens: Tokens{
 			IDToken:      out.IDToken,
 			RefreshToken: out.RefreshToken,
@@ -109,7 +161,7 @@ func (c *IdentityClient) RefreshIDToken(ctx context.Context, refreshToken string
 		ExpiresIn    string `json:"expires_in"`
 		UserID       string `json:"user_id"`
 	}
-	if err := c.do(ctx, refreshURL, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()), &out); err != nil {
+	if err := c.do(ctx, c.refreshURL, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()), &out); err != nil {
 		return "", nil, err
 	}
 

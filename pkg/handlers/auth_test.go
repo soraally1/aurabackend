@@ -307,3 +307,73 @@ func TestValidateUpdateProfile(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateOptionalProfile(t *testing.T) {
+	tests := []struct {
+		name    string
+		reqName *string
+		usia    *int
+		tinggi  *float64
+		berat   *float64
+		waktu   *float64
+		wantErr string
+	}{
+		{
+			name:    "all nil fields (valid for google login without extra fields)",
+			wantErr: "",
+		},
+		{
+			name:    "valid all fields",
+			reqName: stringPtr("Google User"),
+			usia:    intPtr(28),
+			tinggi:  floatPtr(172),
+			berat:   floatPtr(68),
+			waktu:   floatPtr(2.5),
+			wantErr: "",
+		},
+		{
+			name:    "empty name",
+			reqName: stringPtr("   "),
+			wantErr: "name cannot be empty",
+		},
+		{
+			name:    "name too long",
+			reqName: stringPtr(strings.Repeat("x", 101)),
+			wantErr: "name must be at most 100 characters",
+		},
+		{
+			name:    "invalid usia negative",
+			usia:    intPtr(-10),
+			wantErr: "usia must be between 1 and 150",
+		},
+		{
+			name:    "invalid tinggi zero",
+			tinggi:  floatPtr(0),
+			wantErr: "tinggi_badan must be between 1 and 300 cm",
+		},
+		{
+			name:    "invalid berat zero",
+			berat:   floatPtr(0),
+			wantErr: "berat_badan must be between 1 and 500 kg",
+		},
+		{
+			name:    "invalid waktu negative",
+			waktu:   floatPtr(-0.5),
+			wantErr: "waktu_di_jalan must be between 0 and 24 hours",
+		},
+		{
+			name:    "invalid waktu over 24",
+			waktu:   floatPtr(25),
+			wantErr: "waktu_di_jalan must be between 0 and 24 hours",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := validateOptionalProfile(tt.reqName, tt.usia, tt.tinggi, tt.berat, tt.waktu)
+			if got != tt.wantErr {
+				t.Fatalf("expected %q, got %q", tt.wantErr, got)
+			}
+		})
+	}
+}

@@ -43,6 +43,9 @@ func newRouter() http.Handler {
 	mux.Handle("POST /api/auth/login", public(handlers.Login))
 	mux.Handle("POST /auth/login", public(handlers.Login))
 
+	mux.Handle("POST /api/auth/google", public(handlers.GoogleLogin))
+	mux.Handle("POST /auth/google", public(handlers.GoogleLogin))
+
 	mux.Handle("POST /api/auth/refresh", public(handlers.Refresh))
 	mux.Handle("POST /auth/refresh", public(handlers.Refresh))
 

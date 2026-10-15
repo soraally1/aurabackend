@@ -23,6 +23,7 @@ vercel.json             Rewrites all paths -> /api/index
 |---|---|
 | Register | Admin SDK `CreateUser` → Firestore `users/{uid}` doc → password sign-in to return tokens |
 | Login | Firebase Auth REST `accounts:signInWithPassword` (the Admin SDK can't check passwords) |
+| Google Login | Verifies Firebase ID token or exchanges Google ID/Access token via `accounts:signInWithIdp` → Firestore `users/{uid}` doc backfill |
 | Protected routes | `Authorization: Bearer <idToken>` checked with Admin SDK `VerifyIDTokenAndCheckRevoked` |
 | Refresh | Firebase secure token REST endpoint |
 | Logout | Admin SDK `RevokeRefreshTokens` (signs the user out on all devices) |
@@ -31,7 +32,7 @@ Passwords are stored only in Firebase Auth, never in Firestore.
 
 ## Firebase setup
 
-1. **Authentication → Sign-in method** → enable **Email/Password**.
+1. **Authentication → Sign-in method** → enable **Email/Password** and **Google**.
 2. **Firestore Database** → create a database.
 3. **Project settings → Service accounts** → *Generate new private key* (this downloads a JSON file).
 4. **Project settings → General** → copy the **Web API Key**.
@@ -102,6 +103,24 @@ Errors: `422 VALIDATION_ERROR`, `409 EMAIL_EXISTS`
 ```
 `200` → `{ user, tokens }`
 Errors: `401 INVALID_CREDENTIALS`, `403 USER_DISABLED`, `429 TOO_MANY_ATTEMPTS`
+
+### `POST /api/auth/google`
+Menerima token dari Firebase Client SDK (`idToken` Firebase) atau Google OAuth token (`idToken` / `accessToken` Google):
+```json
+{
+  "idToken": "<firebase_id_token_atau_google_id_token>",
+  "accessToken": "<opsional_google_access_token>",
+  "name": "Daffa",
+  "usia": 25,
+  "tinggi_badan": 170,
+  "berat_badan": 65,
+  "waktu_di_jalan": 2
+}
+```
+Field `name`, `usia`, `tinggi_badan`, `berat_badan`, `waktu_di_jalan` bersifat opsional (dapat diisi nanti via `PUT /api/auth/profile`).
+
+`200` → `{ user, tokens: { idToken, refreshToken, expiresIn } }`
+Errors: `401 INVALID_CREDENTIALS`, `403 USER_DISABLED`, `403 PROVIDER_NOT_ALLOWED`, `422 VALIDATION_ERROR`
 
 ### `POST /api/auth/refresh`
 ```json
