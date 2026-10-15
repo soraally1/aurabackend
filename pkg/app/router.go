@@ -75,6 +75,27 @@ func newRouter() http.Handler {
 	mux.Handle("POST /api/zones", protected(handlers.CreateZone))
 	mux.Handle("POST /zones", protected(handlers.CreateZone))
 
+	// Hospitals & Routing Services
+	mux.Handle("GET /api/v1/routes", public(handlers.Routes))
+	mux.Handle("GET /api/routes", public(handlers.Routes))
+	mux.Handle("GET /routes", public(handlers.Routes))
+
+	mux.Handle("GET /api/v1/hospitals/nearby", public(handlers.NearbyHospitals))
+	mux.Handle("GET /api/hospitals/nearby", public(handlers.NearbyHospitals))
+	mux.Handle("GET /hospitals/nearby", public(handlers.NearbyHospitals))
+
+	mux.Handle("GET /api/v1/hospitals", public(handlers.ListHospitals))
+	mux.Handle("GET /api/hospitals", public(handlers.ListHospitals))
+	mux.Handle("GET /hospitals", public(handlers.ListHospitals))
+
+	mux.Handle("GET /api/v1/hospitals/{id}", public(handlers.GetHospital))
+	mux.Handle("GET /api/hospitals/{id}", public(handlers.GetHospital))
+	mux.Handle("GET /hospitals/{id}", public(handlers.GetHospital))
+
+	mux.Handle("POST /api/v1/hospitals/seed", public(handlers.SeedHospitals))
+	mux.Handle("POST /api/hospitals/seed", public(handlers.SeedHospitals))
+	mux.Handle("POST /hospitals/seed", public(handlers.SeedHospitals))
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "Route not found")
 	})

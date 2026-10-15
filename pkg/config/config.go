@@ -25,6 +25,8 @@ type Config struct {
 	UsersCollection string
 	// ZonesCollection is the Firestore collection where traffic and pollution zones are stored.
 	ZonesCollection string
+	// HospitalsCollection is the Firestore collection where hospital records are stored.
+	HospitalsCollection string
 }
 
 // Load reads configuration from the environment.
@@ -38,6 +40,7 @@ type Config struct {
 //   - FIRESTORE_DATABASE_ID:  defaults to "(default)"
 //   - USERS_COLLECTION:       defaults to "users"
 //   - ZONES_COLLECTION:       defaults to "environmental_zones"
+//   - HOSPITALS_COLLECTION:   defaults to "hospitals"
 func Load() (*Config, error) {
 	rawKey := strings.TrimSpace(os.Getenv("FIREBASE_SERVICE_ACCOUNT_KEY"))
 	if rawKey == "" {
@@ -73,6 +76,7 @@ func Load() (*Config, error) {
 		FirestoreDatabaseID: getEnv("FIRESTORE_DATABASE_ID", "(default)"),
 		UsersCollection:     getEnv("USERS_COLLECTION", "users"),
 		ZonesCollection:     getEnv("ZONES_COLLECTION", "environmental_zones"),
+		HospitalsCollection: getEnv("HOSPITALS_COLLECTION", "hospitals"),
 	}, nil
 }
 

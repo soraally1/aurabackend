@@ -177,3 +177,91 @@ curl -X PUT $BASE/api/auth/profile -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"usia": 26, "tinggi_badan": 171, "berat_badan": 66, "waktu_di_jalan": 1.5}'
 ```
+
+---
+
+## Hospital & Navigation Endpoints
+
+### 1. Rute & Navigasi Turn-by-Turn
+- **Method & Path:** `GET /api/v1/routes`
+- **Query Params:**
+  - `origin_lat`: Latitude posisi awal / user (required)
+  - `origin_lon`: Longitude posisi awal / user (required)
+  - `dest_lat`: Latitude posisi tujuan / RS (required)
+  - `dest_lon`: Longitude posisi tujuan / RS (required)
+- **Response JSON:**
+```json
+{
+  "success": true,
+  "data": {
+    "distance_meters": 3301.3,
+    "duration_seconds": 361.7,
+    "coordinates": [
+      [110.41257, -7.001692],
+      [110.412745, -7.001899]
+    ],
+    "steps": [
+      {
+        "name": "Jl. Veteran",
+        "distance": 350.0,
+        "duration": 45.0,
+        "modifier": "left",
+        "type": "turn"
+      }
+    ]
+  }
+}
+```
+
+### 2. Rumah Sakit Terdekat (Nearby)
+- **Method & Path:** `GET /api/v1/hospitals/nearby`
+- **Query Params:**
+  - `lat`: Latitude user (required)
+  - `lon`: Longitude user (required)
+  - `radius_km`: Radius pencarian dalam KM (default: `15`)
+  - `limit`: Jumlah maksimal RS dikembalikan (default: `10`)
+- **Response JSON:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "rsup-dr-kariadi",
+      "name": "RSUP Dr. Kariadi",
+      "address": "Jl. DR. Sutomo No.16, Randusari, Semarang Selatan",
+      "latitude": -6.9934,
+      "longitude": 110.4087,
+      "rating": 4.8,
+      "user_ratings_total": 4520,
+      "phone": "(024) 8413476",
+      "open_hours": "Buka 24 Jam",
+      "type": "hospital",
+      "image_url": "https://...",
+      "facilities": ["IGD 24 Jam", "Rawat Inap", "Rawat Jalan", "Farmasi 24 Jam", "Spesialis Paru"],
+      "distance_km": 0.0
+    }
+  ]
+}
+```
+
+### 3. List & Detail Rumah Sakit
+- `GET /api/v1/hospitals` (List semua RS, opsi filter `?q=kariadi`)
+- `GET /api/v1/hospitals/{id}` (Detail RS berdasarkan slug ID)
+
+### 4. Hospital Scraper & Seeder CLI
+Tool scraping & sinkronisasi data rumah sakit ke Firestore:
+```bash
+# Menjalankan seeder langsung ke Firestore:
+go run ./cmd/seeder
+
+# Menjalankan dengan mode preview (dry-run):
+go run ./cmd/seeder -dry-run
+
+# Custom koordinat dan radius:
+go run ./cmd/seeder -lat -6.9934 -lon 110.4087 -radius 20000
+```
+Fitur Seeder:
+- Mendukung Google Places API (New) jika key tersedia.
+- Fallback otomatis ke Overpass API (OpenStreetMap) dan dataset terkurasi Semarang.
+- Strict blacklist filter: otomatis mengecualikan Puskesmas, Klinik, Apotek, dan Lab.
+
