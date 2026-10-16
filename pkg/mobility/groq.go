@@ -94,58 +94,73 @@ Berikan skor dampak polusi 0-100, level risiko, penjelasan klinis dari dokter pa
 		stats.WaypointsProcessed,
 	)
 
-	reqPayload := groqRequest{
-		Model: g.model,
-		Messages: []groqMessage{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: userPrompt},
-		},
-		ResponseFormat: map[string]any{"type": "json_object"},
-		Temperature:    0.2,
+	modelsToTry := []string{
+		g.model,
+		"openai/gpt-oss-120b",
+		"openai/gpt-oss-20b",
+		"qwen/qwen3.8-27b",
 	}
 
-	bodyBytes, err := json.Marshal(reqPayload)
-	if err != nil {
-		return g.FallbackRuleBasedDiagnosis(stats), err
+	for _, modelName := range modelsToTry {
+		reqPayload := groqRequest{
+			Model: modelName,
+			Messages: []groqMessage{
+				{Role: "system", Content: systemPrompt},
+				{Role: "user", Content: userPrompt},
+			},
+			ResponseFormat: map[string]any{"type": "json_object"},
+			Temperature:    0.2,
+		}
+
+		bodyBytes, err := json.Marshal(reqPayload)
+		if err != nil {
+			continue
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.groq.com/openai/v1/chat/completions", bytes.NewReader(bodyBytes))
+		if err != nil {
+			continue
+		}
+		req.Header.Set("Authorization", "Bearer "+g.apiKey)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "AuraBackend-AI/1.0 (team@aura.app)")
+
+		resp, err := g.httpClient.Do(req)
+		if err != nil {
+			log.Printf("[Groq API] HTTP request error for model %s: %v", modelName, err)
+			continue
+		}
+
+		respBody, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			log.Printf("[Groq API] Non-200 response (%d) for model %s: %s", resp.StatusCode, modelName, string(respBody))
+			continue
+		}
+
+		var gResp groqResponse
+		if err := json.Unmarshal(respBody, &gResp); err != nil || len(gResp.Choices) == 0 {
+			continue
+		}
+
+		var diagnosis AIDiagnosis
+		content := strings.TrimSpace(gResp.Choices[0].Message.Content)
+		if err := json.Unmarshal([]byte(content), &diagnosis); err != nil {
+			log.Printf("[Groq API] Unmarshal JSON error for model %s: %v", modelName, err)
+			continue
+		}
+
+		if diagnosis.ImpactScore > 0 && diagnosis.DoctorDiagnosis != "" {
+			return diagnosis, nil
+		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.groq.com/openai/v1/chat/completions", bytes.NewReader(bodyBytes))
-	if err != nil {
-		return g.FallbackRuleBasedDiagnosis(stats), err
-	}
-	req.Header.Set("Authorization", "Bearer "+g.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := g.httpClient.Do(req)
-	if err != nil {
-		log.Printf("[Groq API] HTTP request error: %v, using clinical fallback", err)
-		return g.FallbackRuleBasedDiagnosis(stats), nil
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return g.FallbackRuleBasedDiagnosis(stats), nil
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("[Groq API] Non-200 response (%d): %s, using clinical fallback", resp.StatusCode, string(respBody))
-		return g.FallbackRuleBasedDiagnosis(stats), nil
-	}
-
-	var gResp groqResponse
-	if err := json.Unmarshal(respBody, &gResp); err != nil || len(gResp.Choices) == 0 {
-		return g.FallbackRuleBasedDiagnosis(stats), nil
-	}
-
-	var diagnosis AIDiagnosis
-	content := strings.TrimSpace(gResp.Choices[0].Message.Content)
-	if err := json.Unmarshal([]byte(content), &diagnosis); err != nil {
-		log.Printf("[Groq API] Unmarshal JSON error: %v, using clinical fallback", err)
-		return g.FallbackRuleBasedDiagnosis(stats), nil
-	}
-
-	return diagnosis, nil
+	log.Printf("[Groq API] All Groq models exhausted or unavailable, using clinical rule-based diagnosis")
+	return g.FallbackRuleBasedDiagnosis(stats), nil
 }
 
 // FallbackRuleBasedDiagnosis provides a high-fidelity clinical assessment if Groq API is unavailable.

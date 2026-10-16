@@ -75,6 +75,11 @@ func Load() (*Config, error) {
 		return nil, errors.New("FIREBASE_WEB_API_KEY is not set")
 	}
 
+	groqKey := strings.TrimSpace(os.Getenv("GROQ_AURA2"))
+	if groqKey == "" {
+		groqKey = strings.TrimSpace(os.Getenv("GROQ_API_KEY"))
+	}
+
 	return &Config{
 		ServiceAccountJSON:  saJSON,
 		ProjectID:           projectID,
@@ -83,7 +88,7 @@ func Load() (*Config, error) {
 		UsersCollection:     getEnv("USERS_COLLECTION", "users"),
 		ZonesCollection:     getEnv("ZONES_COLLECTION", "environmental_zones"),
 		HospitalsCollection: getEnv("HOSPITALS_COLLECTION", "hospitals"),
-		GroqAPIKey:          strings.TrimSpace(os.Getenv("GROQ_API_KEY")),
+		GroqAPIKey:          groqKey,
 		MobilityCollection:  getEnv("MOBILITY_COLLECTION", "daily_mobility"),
 	}, nil
 }
