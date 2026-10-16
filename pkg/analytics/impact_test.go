@@ -68,6 +68,12 @@ func TestAnalyze7DaysForecast(t *testing.T) {
 		if day.TrafficCongestionIdx < 0 || day.TrafficCongestionIdx > 100 {
 			t.Errorf("invalid congestion index: %f", day.TrafficCongestionIdx)
 		}
+		if day.TemperatureC <= 0 {
+			t.Errorf("expected positive temperature_c, got %f", day.TemperatureC)
+		}
+		if day.WeatherCondition == "" {
+			t.Errorf("expected non-empty weather_condition for %s", day.Date)
+		}
 		if len(day.Recommendations) == 0 {
 			t.Errorf("missing recommendations for %s", day.Date)
 		}

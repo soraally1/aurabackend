@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -77,5 +78,60 @@ func TestParseNearbyQuery(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestZoneImpactAnalysisEndpoint(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/zones/analysis?lat=-6.9934&lon=110.4087&name=Semarang%20Pusat", nil)
+	rec := httptest.NewRecorder()
+
+	ZoneImpactAnalysis(rec, req, nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ZoneImpactAnalysis returned status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Success bool `json:"success"`
+		Data    struct {
+			LocationName  string `json:"location_name"`
+			DailyForecast []struct {
+				Date                string  `json:"date"`
+				DayName             string  `json:"day_name"`
+				PredictedAQI        int     `json:"predicted_aqi"`
+				TemperatureC        float64 `json:"temperature_c"`
+				WeatherCondition    string  `json:"weather_condition"`
+				DispersionCondition string  `json:"dispersion_condition"`
+				PrecipitationMM     float64 `json:"precipitation_mm"`
+				HumidityPercent     float64 `json:"humidity_percent"`
+				ImpactLevel         string  `json:"impact_level"`
+			} `json:"daily_forecast"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode ZoneImpactAnalysis response: %v", err)
+	}
+
+	if !resp.Success {
+		t.Fatalf("expected success true")
+	}
+
+	if len(resp.Data.DailyForecast) != 7 {
+		t.Fatalf("expected 7 forecast days, got %d", len(resp.Data.DailyForecast))
+	}
+
+	firstDay := resp.Data.DailyForecast[0]
+	t.Logf("Day 1: Date=%s, AQI=%d, Temp=%.1f C, Weather=%s, Dispersion=%s, Impact=%s",
+		firstDay.Date, firstDay.PredictedAQI, firstDay.TemperatureC, firstDay.WeatherCondition, firstDay.DispersionCondition, firstDay.ImpactLevel)
+
+	if firstDay.TemperatureC <= 0 {
+		t.Errorf("expected positive temperature_c, got %f", firstDay.TemperatureC)
+	}
+	if firstDay.WeatherCondition == "" {
+		t.Errorf("expected non-empty weather_condition")
+	}
+	if firstDay.DispersionCondition == "" {
+		t.Errorf("expected non-empty dispersion_condition")
 	}
 }

@@ -104,13 +104,16 @@ func ZoneImpactAnalysis(w http.ResponseWriter, r *http.Request, c *firebase.Clie
 	name := strings.TrimSpace(q.Get("name"))
 
 	ctx := r.Context()
-	store := zones.NewStore(c.Firestore, c.Config.ZonesCollection)
-
 	var targetZone *zones.Zone
 	var lat, lon float64
 	var err error
 
 	if zoneID != "" {
+		if c == nil || c.Firestore == nil {
+			httpx.Error(w, http.StatusInternalServerError, "SERVER_ERROR", "Database client not available")
+			return
+		}
+		store := zones.NewStore(c.Firestore, c.Config.ZonesCollection)
 		targetZone, err = store.Get(ctx, zoneID)
 		if err != nil {
 			httpx.Error(w, http.StatusNotFound, "ZONE_NOT_FOUND", fmt.Sprintf("Zone with ID '%s' not found", zoneID))

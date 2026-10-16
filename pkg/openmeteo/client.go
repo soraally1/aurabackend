@@ -58,6 +58,7 @@ type DailyWeatherForecast struct {
 	Time                  []string  `json:"time"`
 	TemperatureMax        []float64 `json:"temperature_2m_max"`
 	TemperatureMin        []float64 `json:"temperature_2m_min"`
+	WeatherCode           []int     `json:"weather_code"`
 	RelativeHumidityMean  []float64 `json:"relative_humidity_2m_mean"`
 	WindSpeedMax          []float64 `json:"wind_speed_10m_max"`
 	WindDirectionDominant []float64 `json:"wind_direction_10m_dominant"`
@@ -113,7 +114,7 @@ func (c *Client) FetchAirQuality(ctx context.Context, lat, lon float64) (*AirQua
 // FetchWeatherForecast retrieves 7-day meteorological forecast from Open-Meteo.
 func (c *Client) FetchWeatherForecast(ctx context.Context, lat, lon float64) (*WeatherForecastResponse, error) {
 	url := fmt.Sprintf(
-		"https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&daily=temperature_2m_max,temperature_2m_min,relative_humidity_2m_mean,wind_speed_10m_max,wind_direction_10m_dominant,precipitation_sum&forecast_days=7&timezone=auto",
+		"https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&daily=weather_code,temperature_2m_max,temperature_2m_min,relative_humidity_2m_mean,wind_speed_10m_max,wind_direction_10m_dominant,precipitation_sum&forecast_days=7&timezone=auto",
 		lat, lon,
 	)
 

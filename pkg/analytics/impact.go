@@ -27,7 +27,9 @@ type DailyImpact struct {
 	WindSpeedKmH         float64  `json:"wind_speed_kmh"`         // km/h
 	WindDirectionDeg     float64  `json:"wind_direction_deg"`     // 0 - 360
 	WindDirectionCompass string   `json:"wind_direction_compass"` // U, TL, T, TG, S, BD, B, BL
-	DispersionCondition  string   `json:"dispersion_condition"`   // Dispersi Cepat, Normal, Terperangkap (Stagnan)
+	TemperatureC         float64  `json:"temperature_c"`          // Suhu riil (misal 36.0)
+	WeatherCondition     string   `json:"weather_condition"`      // "Berasap", "Cerah Berawan", dll
+	DispersionCondition  string   `json:"dispersion_condition"`   // Dispersi Cepat, Normal, Terperangkap (Stagnan), Berasap
 	PrecipitationMm      float64  `json:"precipitation_mm"`       // mm
 	Summary              string   `json:"summary"`
 	Recommendations      []string `json:"recommendations"`
@@ -95,6 +97,14 @@ func Analyze7DaysForecast(
 		dayNameId := translateDayName(weekdayEn)
 
 		// 1. Weather variables
+		tempC := 36.0
+		if len(weather.TemperatureMax) > i && weather.TemperatureMax[i] > 0 {
+			tempC = math.Round(weather.TemperatureMax[i]*10) / 10
+		}
+		wCode := 0
+		if len(weather.WeatherCode) > i {
+			wCode = weather.WeatherCode[i]
+		}
 		humidity := 75.0
 		if len(weather.RelativeHumidityMean) > i {
 			humidity = weather.RelativeHumidityMean[i]
@@ -136,6 +146,33 @@ func Analyze7DaysForecast(
 		effectivePM25 := basePM25 * dispersionMultiplier * trafficEmissionMultiplier
 		effectivePM10 := basePM10 * dispersionMultiplier * trafficEmissionMultiplier
 		effectiveCO := baseCO * trafficEmissionMultiplier
+		predAQI := int(math.Round(float64(baseAQI) * dispersionMultiplier))
+
+		// Determine weather condition and smoke/haze status
+		// WMO code 4 (smoke), 5 (haze), 45/48 (fog/depositing rime fog)
+		// or when effective PM2.5 >= 35.0 or predicted AQI >= 100 with low rain (precip < 5.0)
+		isSmoky := (wCode == 4 || wCode == 5 || wCode == 45 || wCode == 48) ||
+			((effectivePM25 >= 35.0 || predAQI >= 100) && precip < 5.0)
+
+		var weatherCondition string
+		if isSmoky {
+			weatherCondition = "Berasap"
+			dispersionCond = "Berasap"
+		} else if precip >= 10.0 {
+			weatherCondition = "Hujan Lebat"
+		} else if precip >= 2.0 {
+			weatherCondition = "Hujan Ringan"
+		} else if wCode == 1 || wCode == 2 {
+			weatherCondition = "Cerah Berawan"
+		} else if wCode == 3 {
+			weatherCondition = "Berawan"
+		} else if wCode >= 51 && wCode <= 67 {
+			weatherCondition = "Hujan Ringan"
+		} else if wCode >= 80 && wCode <= 99 {
+			weatherCondition = "Hujan Petir"
+		} else {
+			weatherCondition = "Cerah"
+		}
 
 		// 7. Calculate Composite Health Risk Score (0 - 100)
 		riskScore := calculateRiskScore(effectivePM25, baseAQI, predCongestion, humidity, windSpeed, precip)
@@ -156,13 +193,15 @@ func Analyze7DaysForecast(
 			PredictedPM25:        math.Round(effectivePM25*10) / 10,
 			PredictedPM10:        math.Round(effectivePM10*10) / 10,
 			PredictedCO:          math.Round(effectiveCO*10) / 10,
-			PredictedAQI:         int(math.Round(float64(baseAQI) * dispersionMultiplier)),
+			PredictedAQI:         predAQI,
 			TrafficCongestionIdx: math.Round(predCongestion*10) / 10,
 			TrafficSeverity:      trafficSeverity,
 			Humidity:             humidity,
 			WindSpeedKmH:         windSpeed,
 			WindDirectionDeg:     windDir,
 			WindDirectionCompass: degreeToCompass(windDir),
+			TemperatureC:         tempC,
+			WeatherCondition:     weatherCondition,
 			DispersionCondition:  dispersionCond,
 			PrecipitationMm:      precip,
 			Summary:              summary,
