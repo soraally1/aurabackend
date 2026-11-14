@@ -31,6 +31,8 @@ type Config struct {
 	GroqAPIKey string
 	// MobilityCollection is the Firestore collection where mobility and pollution analyses are stored.
 	MobilityCollection string
+	// TrackingCollection is the Firestore collection where GPS tracking sessions are stored.
+	TrackingCollection string
 }
 
 // Load reads configuration from the environment.
@@ -47,6 +49,7 @@ type Config struct {
 //   - HOSPITALS_COLLECTION:   defaults to "hospitals"
 //   - GROQ_API_KEY:           Groq API Key
 //   - MOBILITY_COLLECTION:    defaults to "daily_mobility"
+//   - TRACKING_COLLECTION:    defaults to "tracking_sessions"
 func Load() (*Config, error) {
 	rawKey := strings.TrimSpace(os.Getenv("FIREBASE_SERVICE_ACCOUNT_KEY"))
 	if rawKey == "" {
@@ -90,6 +93,7 @@ func Load() (*Config, error) {
 		HospitalsCollection: getEnv("HOSPITALS_COLLECTION", "hospitals"),
 		GroqAPIKey:          groqKey,
 		MobilityCollection:  getEnv("MOBILITY_COLLECTION", "daily_mobility"),
+		TrackingCollection:  getEnv("TRACKING_COLLECTION", "tracking_sessions"),
 	}, nil
 }
 

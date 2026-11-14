@@ -157,6 +157,21 @@ func (s *Store) findNearbyFallback(ctx context.Context, lat, lon, radiusKm float
 	return results, nil
 }
 
+// FindNearestZone finds the single nearest zone to a given coordinate.
+// Returns the zone and distance in km, or (nil, maxDist) if no zone found within 10km.
+func (s *Store) FindNearestZone(ctx context.Context, lat, lon float64) (*Zone, float64) {
+	const maxSearchRadiusKm = 10.0
+	const maxDist = 999.0 // Return this as distance if no zone found
+
+	nearby, err := s.FindNearby(ctx, lat, lon, maxSearchRadiusKm)
+	if err != nil || len(nearby) == 0 {
+		return nil, maxDist
+	}
+
+	// Return the first (nearest) result
+	return &nearby[0].Zone, nearby[0].DistanceKm
+}
+
 // SeedDefaultZones populates Firestore with default sample hotspot zones if empty.
 func (s *Store) SeedDefaultZones(ctx context.Context) error {
 	defaults := []Zone{

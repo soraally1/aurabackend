@@ -105,6 +105,28 @@ func newRouter() http.Handler {
 	mux.Handle("GET /api/mobility/daily-analysis", public(handlers.GetDailyAnalysis))
 	mux.Handle("GET /mobility/daily-analysis", public(handlers.GetDailyAnalysis))
 
+	// Navigation & Route Calculation with Health Warnings
+	mux.Handle("POST /api/v1/navigation/calculate-route", public(handlers.CalculateRoute))
+	mux.Handle("POST /api/navigation/calculate-route", public(handlers.CalculateRoute))
+	mux.Handle("POST /navigation/calculate-route", public(handlers.CalculateRoute))
+
+	// Tracking Sessions & Waypoints (GPS tracking during journeys)
+	mux.Handle("POST /api/v1/tracking/start-session", protected(handlers.StartSession))
+	mux.Handle("POST /api/tracking/start-session", protected(handlers.StartSession))
+	mux.Handle("POST /tracking/start-session", protected(handlers.StartSession))
+
+	mux.Handle("POST /api/v1/tracking/sync-waypoints", protected(handlers.SyncWaypoints))
+	mux.Handle("POST /api/tracking/sync-waypoints", protected(handlers.SyncWaypoints))
+	mux.Handle("POST /tracking/sync-waypoints", protected(handlers.SyncWaypoints))
+
+	mux.Handle("POST /api/v1/tracking/stop-session", protected(handlers.StopSession))
+	mux.Handle("POST /api/tracking/stop-session", protected(handlers.StopSession))
+	mux.Handle("POST /tracking/stop-session", protected(handlers.StopSession))
+
+	mux.Handle("GET /api/v1/tracking/daily-history", protected(handlers.DailyHistory))
+	mux.Handle("GET /api/tracking/daily-history", protected(handlers.DailyHistory))
+	mux.Handle("GET /tracking/daily-history", protected(handlers.DailyHistory))
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "Route not found")
 	})
