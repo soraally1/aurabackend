@@ -48,21 +48,39 @@ type Geometry struct {
 
 // Route represents a single route option from the routing service.
 type Route struct {
-	Distance float64 `json:"distance"`
-	Duration float64 `json:"duration"`
-	Geometry struct {
-		Coordinates [][]float64 `json:"coordinates"`
-		Type        string      `json:"type"`
-	} `json:"geometry"`
-	Legs []struct {
-		Steps []struct {
-			Name     string  `json:"name"`
-			Distance float64 `json:"distance"`
-			Duration float64 `json:"duration"`
-			Maneuver struct {
-				Modifier string `json:"modifier"`
-				Type     string `json:"type"`
-			} `json:"maneuver"`
-		} `json:"steps"`
-	} `json:"legs"`
+	Distance float64    `json:"distance"`
+	Duration float64    `json:"duration"`
+	Geometry Geometry   `json:"geometry"`
+	Legs     []RouteLeg `json:"legs"`
+}
+
+// RouteLeg represents a leg between consecutive route stops.
+type RouteLeg struct {
+	Distance float64         `json:"distance"`
+	Duration float64         `json:"duration"`
+	Steps    []RouteLegStep  `json:"steps"`
+}
+
+// RouteLegStep represents a single OSRM turn-by-turn step.
+type RouteLegStep struct {
+	Name          string              `json:"name"`
+	Distance      float64             `json:"distance"`
+	Duration      float64             `json:"duration"`
+	Geometry      *Geometry           `json:"geometry,omitempty"`
+	Maneuver      RouteManeuver       `json:"maneuver"`
+	Intersections []RouteIntersection `json:"intersections,omitempty"`
+}
+
+// RouteManeuver holds OSRM maneuver details for a step.
+type RouteManeuver struct {
+	Location      []float64 `json:"location,omitempty"` // [lon, lat]
+	BearingAfter  float64   `json:"bearing_after,omitempty"`
+	BearingBefore float64   `json:"bearing_before,omitempty"`
+	Modifier      string    `json:"modifier,omitempty"`
+	Type          string    `json:"type,omitempty"`
+}
+
+// RouteIntersection holds an intersection location along a step.
+type RouteIntersection struct {
+	Location []float64 `json:"location,omitempty"` // [lon, lat]
 }

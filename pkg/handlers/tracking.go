@@ -2,16 +2,22 @@ package handlers
 
 import (
 	"fmt"
+	"math"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
 	"aurabackend/pkg/firebase"
+	"aurabackend/pkg/geoutils"
 	"aurabackend/pkg/httpx"
 	"aurabackend/pkg/middleware"
 	"aurabackend/pkg/tracking"
+	"aurabackend/pkg/users"
 	"aurabackend/pkg/zones"
 )
+
+var wibZone = time.FixedZone("WIB", 7*3600)
 
 // StartSession handles POST /api/v1/tracking/start-session.
 // Creates a new active tracking session.
@@ -33,33 +39,35 @@ func StartSession(w http.ResponseWriter, r *http.Request, c *firebase.Clients) {
 		return
 	}
 
-	// Get user ID from auth token or request body
-	userID := resolveUserIDFromAuth(r, c, strings.TrimSpace(req.UserID))
+	// Verify user ownership (IDOR protection)
+	reqUserID := strings.TrimSpace(req.UserID)
+	if authUID := middleware.UID(r.Context()); authUID != "" && reqUserID != "" && reqUserID != authUID {
+		httpx.Error(w, http.StatusForbidden, "FORBIDDEN", "user_id does not match authenticated user")
+		return
+	}
+	userID := resolveUserIDFromAuth(r, c, reqUserID)
 
-	// Generate session ID: session_{userID}_{unixTimestamp}
-	sessionID := fmt.Sprintf("session_%s_%d", userID, time.Now().Unix())
+	now := time.Now().UTC()
+	sessionID := fmt.Sprintf("session_%s_%d", userID, now.UnixMilli())
 
-	// Create session object
 	session := &tracking.Session{
 		ID:            sessionID,
 		UserID:        userID,
 		SessionName:   strings.TrimSpace(req.SessionName),
 		Status:        "active",
-		StartedAt:     time.Now().UTC(),
+		StartedAt:     now,
 		StartLocation: req.StartLocation,
 		Waypoints:     []tracking.Waypoint{},
-		CreatedAt:     time.Now().UTC(),
-		UpdatedAt:     time.Now().UTC(),
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 
-	// Persist to Firestore
 	store := tracking.NewStore(c.Firestore, c.Config.TrackingCollection)
 	if err := store.CreateSession(r.Context(), session); err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "DATABASE_ERROR", fmt.Sprintf("Failed to create session: %v", err))
 		return
 	}
 
-	// Return response
 	response := map[string]any{
 		"session_id": session.ID,
 		"started_at": session.StartedAt.Format(time.RFC3339),
@@ -88,12 +96,11 @@ func SyncWaypoints(w http.ResponseWriter, r *http.Request, c *firebase.Clients) 
 		return
 	}
 
-	if len(req.Waypoints) == 0 {
+	if len(req.Waypoints) == 0 && !req.IsFinal {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_INPUT", "waypoints array cannot be empty")
 		return
 	}
 
-	// Validate all waypoints
 	for _, wp := range req.Waypoints {
 		if err := validateWaypoint(wp); err != nil {
 			httpx.Error(w, http.StatusBadRequest, "INVALID_INPUT", err.Error())
@@ -101,7 +108,6 @@ func SyncWaypoints(w http.ResponseWriter, r *http.Request, c *firebase.Clients) 
 		}
 	}
 
-	// Get or verify session
 	store := tracking.NewStore(c.Firestore, c.Config.TrackingCollection)
 	session, err := store.GetSession(r.Context(), req.SessionID)
 	if err != nil {
@@ -113,27 +119,48 @@ func SyncWaypoints(w http.ResponseWriter, r *http.Request, c *firebase.Clients) 
 		return
 	}
 
+	if err := verifySessionOwnership(r, session.UserID, req.UserID); err != nil {
+		httpx.Error(w, http.StatusForbidden, "FORBIDDEN", err.Error())
+		return
+	}
+
 	if session.Status != "active" {
 		httpx.Error(w, http.StatusBadRequest, "SESSION_NOT_FOUND", "Session is not active")
 		return
 	}
 
-	// Process waypoints: classify and enrich with zone data
+	// Allow final empty sync ping gracefully
+	if len(req.Waypoints) == 0 {
+		response := map[string]any{
+			"success":         true,
+			"synced_count":    0,
+			"session_id":      req.SessionID,
+			"total_waypoints": len(session.Waypoints),
+			"last_sync_at":    time.Now().UTC().Format(time.RFC3339),
+		}
+		httpx.OK(w, http.StatusOK, response)
+		return
+	}
+
+	// Use last stored waypoint as anchor context across incremental batches
+	var prevAnchor *tracking.Waypoint
+	if len(session.Waypoints) > 0 {
+		last := session.Waypoints[len(session.Waypoints)-1]
+		prevAnchor = &last
+	}
+
 	zoneStore := zones.NewStore(c.Firestore, c.Config.ZonesCollection)
 	analyzer := tracking.NewAnalyzer(zoneStore)
-	processedWaypoints := analyzer.ProcessWaypoints(r.Context(), req.Waypoints)
+	processedWaypoints := analyzer.ProcessWaypointsWithContext(r.Context(), req.Waypoints, prevAnchor)
 
-	// Update session with waypoints
-	if err := store.UpdateWaypoints(r.Context(), req.SessionID, processedWaypoints); err != nil {
+	totalCount, err := store.AppendWaypoints(r.Context(), req.SessionID, processedWaypoints)
+	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "DATABASE_ERROR", fmt.Sprintf("Failed to update waypoints: %v", err))
 		return
 	}
 
-	// Get updated session to return total waypoint count
-	updatedSession, _ := store.GetSession(r.Context(), req.SessionID)
-	totalCount := len(updatedSession.Waypoints)
-
 	response := map[string]any{
+		"success":         true,
 		"synced_count":    len(processedWaypoints),
 		"session_id":      req.SessionID,
 		"total_waypoints": totalCount,
@@ -167,7 +194,6 @@ func StopSession(w http.ResponseWriter, r *http.Request, c *firebase.Clients) {
 		return
 	}
 
-	// Get session
 	store := tracking.NewStore(c.Firestore, c.Config.TrackingCollection)
 	session, err := store.GetSession(r.Context(), req.SessionID)
 	if err != nil {
@@ -179,26 +205,51 @@ func StopSession(w http.ResponseWriter, r *http.Request, c *firebase.Clients) {
 		return
 	}
 
+	if err := verifySessionOwnership(r, session.UserID, req.UserID); err != nil {
+		httpx.Error(w, http.StatusForbidden, "FORBIDDEN", err.Error())
+		return
+	}
+
 	if session.Status != "active" {
 		httpx.Error(w, http.StatusBadRequest, "SESSION_ALREADY_ENDED", "Session already ended")
 		return
 	}
 
-	// Calculate stats
 	stats := tracking.CalculateStats(session.Waypoints, session.StartedAt, req.EndLocation.Timestamp)
+	if len(session.Waypoints) == 0 {
+		distKm := geoutils.HaversineDistance(
+			session.StartLocation.Latitude,
+			session.StartLocation.Longitude,
+			req.EndLocation.Latitude,
+			req.EndLocation.Longitude,
+		)
+		if distKm <= 50.0 {
+			stats.DistanceKm = math.Round(distKm*100) / 100
+		}
+	}
 
-	// Generate health analysis (with Groq if available)
+	// Load optional user profile sensitivity context
+	var userCtx *tracking.UserProfileContext
+	if c != nil && c.Firestore != nil && session.UserID != "" {
+		userStore := users.NewStore(c.Firestore, c.Config.UsersCollection)
+		if profile, uErr := userStore.Get(r.Context(), session.UserID); uErr == nil && profile != nil {
+			userCtx = &tracking.UserProfileContext{
+				Name:         profile.Name,
+				Usia:         profile.Usia,
+				WaktuDiJalan: profile.WaktuDiJalan,
+			}
+		}
+	}
+
 	groqClient := tracking.NewGroqClient(c.Config.GroqAPIKey)
 	analyzer := tracking.NewAnalyzerWithGroq(nil, groqClient)
-	analysis := analyzer.GenerateHealthAnalysisWithGroq(r.Context(), stats)
+	analysis := analyzer.GenerateHealthAnalysisWithUser(r.Context(), stats, userCtx)
 
-	// End session with stats and analysis
 	if err := store.EndSession(r.Context(), req.SessionID, req.EndLocation, stats, analysis); err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "DATABASE_ERROR", fmt.Sprintf("Failed to end session: %v", err))
 		return
 	}
 
-	// Prepare response
 	response := map[string]any{
 		"session_id":       req.SessionID,
 		"started_at":       session.StartedAt.Format(time.RFC3339),
@@ -236,21 +287,24 @@ func DailyHistory(w http.ResponseWriter, r *http.Request, c *firebase.Clients) {
 
 	q := r.URL.Query()
 
-	// Get user ID from auth token or query param
-	userID := resolveUserIDFromAuth(r, c, strings.TrimSpace(q.Get("user_id")))
+	// Verify ownership (IDOR protection)
+	qUserID := strings.TrimSpace(q.Get("user_id"))
+	if authUID := middleware.UID(r.Context()); authUID != "" && qUserID != "" && qUserID != authUID {
+		httpx.Error(w, http.StatusForbidden, "FORBIDDEN", "user_id does not match authenticated user")
+		return
+	}
+	userID := resolveUserIDFromAuth(r, c, qUserID)
 
 	dateStr := strings.TrimSpace(q.Get("date"))
 	if dateStr == "" {
-		dateStr = time.Now().Format("2006-01-02")
+		dateStr = time.Now().In(wibZone).Format("2006-01-02")
 	}
 
-	// Validate date format
 	if _, err := time.Parse("2006-01-02", dateStr); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_DATE_FORMAT", "Invalid date format, use YYYY-MM-DD")
 		return
 	}
 
-	// Get sessions for the date
 	store := tracking.NewStore(c.Firestore, c.Config.TrackingCollection)
 	sessions, err := store.GetSessionsByDate(r.Context(), userID, dateStr)
 	if err != nil {
@@ -258,68 +312,102 @@ func DailyHistory(w http.ResponseWriter, r *http.Request, c *firebase.Clients) {
 		return
 	}
 
-	// Aggregate waypoints and stats
-	var combinedWaypoints []tracking.Waypoint
+	combinedWaypoints := make([]tracking.Waypoint, 0)
 	dailyStats := tracking.SessionStats{
-		WaypointsProcessed: 0,
+		WorstAreaName: "-",
 	}
 
-	sessionList := make([]map[string]any, 0)
+	sessionList := make([]map[string]any, 0, len(sessions))
+	now := time.Now().UTC()
 
 	for _, session := range sessions {
-		// Add session to list
+		waypoints := session.Waypoints
+		if waypoints == nil {
+			waypoints = make([]tracking.Waypoint, 0)
+		}
+
+		var sessionStats tracking.SessionStats
+		if session.Stats != nil && session.Stats.WaypointsProcessed == len(waypoints) {
+			sessionStats = *session.Stats
+		} else {
+			endTime := now
+			if session.EndedAt != nil {
+				endTime = *session.EndedAt
+			} else if len(waypoints) > 0 {
+				endTime = waypoints[len(waypoints)-1].Timestamp
+			}
+			sessionStats = tracking.CalculateStats(waypoints, session.StartedAt, endTime)
+		}
+
 		sessionData := map[string]any{
 			"session_id":       session.ID,
+			"user_id":          session.UserID,
 			"session_name":     session.SessionName,
+			"status":           session.Status,
 			"started_at":       session.StartedAt.Format(time.RFC3339),
-			"duration_minutes": 0,
-			"distance_km":      0,
-			"waypoints":        session.Waypoints,
+			"duration_minutes": sessionStats.DurationMinutes,
+			"distance_km":      sessionStats.DistanceKm,
+			"waypoints":        waypoints,
+			"stats": map[string]any{
+				"total_outdoor_minutes": sessionStats.TotalOutdoorMinutes,
+				"total_indoor_minutes":  sessionStats.TotalIndoorMinutes,
+				"average_outdoor_aqi":   sessionStats.AverageOutdoorAQI,
+				"average_outdoor_pm25":  sessionStats.AverageOutdoorPM25,
+				"max_aqi":               sessionStats.MaxAQI,
+				"worst_area_name":       sessionStats.WorstAreaName,
+				"worst_area_aqi":        sessionStats.WorstAreaAQI,
+				"waypoints_processed":   sessionStats.WaypointsProcessed,
+			},
 		}
 
 		if session.EndedAt != nil {
 			sessionData["ended_at"] = session.EndedAt.Format(time.RFC3339)
-			sessionData["duration_minutes"] = session.EndedAt.Sub(session.StartedAt).Minutes()
+		}
+		if session.Analysis != nil {
+			sessionData["analysis"] = session.Analysis
 		}
 
 		sessionList = append(sessionList, sessionData)
+		combinedWaypoints = append(combinedWaypoints, waypoints...)
 
-		// Combine waypoints
-		combinedWaypoints = append(combinedWaypoints, session.Waypoints...)
+		dailyStats.TotalOutdoorMinutes += sessionStats.TotalOutdoorMinutes
+		dailyStats.TotalIndoorMinutes += sessionStats.TotalIndoorMinutes
+		dailyStats.DistanceKm += sessionStats.DistanceKm
+		dailyStats.WaypointsProcessed += sessionStats.WaypointsProcessed
 
-		// Aggregate stats if session has stats stored
-		// Note: You may need to store stats separately in the session model
-		// For now, we'll recalculate from waypoints
-		if session.EndedAt != nil {
-			sessionStats := tracking.CalculateStats(session.Waypoints, session.StartedAt, *session.EndedAt)
-			dailyStats.TotalOutdoorMinutes += sessionStats.TotalOutdoorMinutes
-			dailyStats.TotalIndoorMinutes += sessionStats.TotalIndoorMinutes
-			dailyStats.DistanceKm += sessionStats.DistanceKm
-			dailyStats.WaypointsProcessed += sessionStats.WaypointsProcessed
-
-			if sessionStats.MaxAQI > dailyStats.MaxAQI {
-				dailyStats.MaxAQI = sessionStats.MaxAQI
+		if sessionStats.MaxAQI > dailyStats.MaxAQI {
+			dailyStats.MaxAQI = sessionStats.MaxAQI
+			if sessionStats.WorstAreaName != "" {
 				dailyStats.WorstAreaName = sessionStats.WorstAreaName
-				dailyStats.WorstAreaAQI = sessionStats.WorstAreaAQI
 			}
+			dailyStats.WorstAreaAQI = sessionStats.WorstAreaAQI
 		}
 	}
 
-	// Calculate daily averages if there are outdoor waypoints
-	if dailyStats.WaypointsProcessed > 0 {
+	// Sort combined waypoints chronologically by timestamp ASC
+	sort.Slice(combinedWaypoints, func(i, j int) bool {
+		return combinedWaypoints[i].Timestamp.Before(combinedWaypoints[j].Timestamp)
+	})
+
+	// Calculate daily outdoor averages from combined waypoints
+	if len(combinedWaypoints) > 0 {
 		var outdoorCount int
 		var aqiSum, pm25Sum float64
 		for _, wp := range combinedWaypoints {
-			if wp.Classification == "outdoor" {
+			if wp.Classification != "indoor" {
 				outdoorCount++
 				aqiSum += float64(wp.AQI)
 				pm25Sum += wp.PM25
 			}
 		}
 		if outdoorCount > 0 {
-			dailyStats.AverageOutdoorAQI = aqiSum / float64(outdoorCount)
-			dailyStats.AverageOutdoorPM25 = pm25Sum / float64(outdoorCount)
+			dailyStats.AverageOutdoorAQI = math.Round((aqiSum/float64(outdoorCount))*10) / 10
+			dailyStats.AverageOutdoorPM25 = math.Round((pm25Sum/float64(outdoorCount))*10) / 10
 		}
+	}
+
+	if dailyStats.WorstAreaName == "" {
+		dailyStats.WorstAreaName = "-"
 	}
 
 	response := map[string]any{
@@ -327,8 +415,8 @@ func DailyHistory(w http.ResponseWriter, r *http.Request, c *firebase.Clients) {
 		"sessions":           sessionList,
 		"combined_waypoints": combinedWaypoints,
 		"daily_stats": map[string]any{
-			"total_outdoor_minutes": dailyStats.TotalOutdoorMinutes,
-			"total_indoor_minutes":  dailyStats.TotalIndoorMinutes,
+			"total_outdoor_minutes": math.Round(dailyStats.TotalOutdoorMinutes*10) / 10,
+			"total_indoor_minutes":  math.Round(dailyStats.TotalIndoorMinutes*10) / 10,
 			"average_outdoor_aqi":   dailyStats.AverageOutdoorAQI,
 			"average_outdoor_pm25":  dailyStats.AverageOutdoorPM25,
 			"max_aqi":               dailyStats.MaxAQI,
@@ -343,7 +431,24 @@ func DailyHistory(w http.ResponseWriter, r *http.Request, c *firebase.Clients) {
 
 // Helper functions
 
+func verifySessionOwnership(r *http.Request, sessionUserID, reqUserID string) error {
+	authUID := middleware.UID(r.Context())
+	if authUID == "" {
+		return nil
+	}
+	if sessionUserID != "" && sessionUserID != authUID {
+		return fmt.Errorf("session does not belong to authenticated user")
+	}
+	if trimmed := strings.TrimSpace(reqUserID); trimmed != "" && trimmed != authUID {
+		return fmt.Errorf("user_id does not match authenticated user")
+	}
+	return nil
+}
+
 func validateLocation(loc tracking.Location) error {
+	if math.IsNaN(loc.Latitude) || math.IsNaN(loc.Longitude) {
+		return fmt.Errorf("coordinates must be valid numbers")
+	}
 	if loc.Latitude < -90 || loc.Latitude > 90 {
 		return fmt.Errorf("latitude must be between -90 and 90")
 	}
@@ -357,6 +462,9 @@ func validateLocation(loc tracking.Location) error {
 }
 
 func validateWaypoint(wp tracking.Waypoint) error {
+	if math.IsNaN(wp.Latitude) || math.IsNaN(wp.Longitude) {
+		return fmt.Errorf("waypoint coordinates must be valid numbers")
+	}
 	if wp.Latitude < -90 || wp.Latitude > 90 {
 		return fmt.Errorf("waypoint latitude must be between -90 and 90")
 	}
@@ -382,7 +490,7 @@ func resolveUserIDFromAuth(r *http.Request, c *firebase.Clients, fallback string
 // calculateSessionStats computes stats from a session (test helper)
 func calculateSessionStats(session *tracking.Session) tracking.SessionStats {
 	if len(session.Waypoints) == 0 {
-		return tracking.SessionStats{WaypointsProcessed: 0}
+		return tracking.SessionStats{WaypointsProcessed: 0, WorstAreaName: "-"}
 	}
 
 	endTime := time.Now().UTC()

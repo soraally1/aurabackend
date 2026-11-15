@@ -1,6 +1,7 @@
 package tracking
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
@@ -190,5 +191,55 @@ func TestGenerateHealthAnalysis(t *testing.T) {
 				t.Errorf("Expected non-empty summary")
 			}
 		})
+	}
+}
+
+func TestProcessWaypointsWithContextAndEnrichment(t *testing.T) {
+	now := time.Now().UTC()
+	prevAnchor := Waypoint{
+		Latitude:  -6.9587,
+		Longitude: 110.4578, // Kawasan Industri Kaligawe
+		Timestamp: now,
+	}
+
+	batch := []Waypoint{
+		{
+			Latitude:  -6.95875,
+			Longitude: 110.45782, // < 60m from anchor, 25 minutes later (dense/incremental stay)
+			Timestamp: now.Add(25 * time.Minute),
+		},
+		{
+			Latitude:  -6.9893,
+			Longitude: 110.4229, // Moved to Simpang Lima
+			Timestamp: now.Add(35 * time.Minute),
+		},
+	}
+
+	analyzer := NewAnalyzer(nil)
+	processed := analyzer.ProcessWaypointsWithContext(context.Background(), batch, &prevAnchor)
+
+	if processed[0].Classification != "indoor" || !processed[0].IsStay {
+		t.Errorf("expected first batch waypoint to be indoor stay relative to prevAnchor, got %+v", processed[0])
+	}
+	if processed[0].AQI <= 100 || processed[0].ZoneName == "" {
+		t.Errorf("expected Kaligawe hotspot enrichment with AQI > 100, got %+v", processed[0])
+	}
+
+	if processed[1].Classification != "outdoor" || processed[1].IsStay {
+		t.Errorf("expected second batch waypoint to be outdoor, got %+v", processed[1])
+	}
+	if processed[1].AQI <= 100 || processed[1].ZoneName != "Simpang Lima Semarang" {
+		t.Errorf("expected Simpang Lima enrichment, got %+v", processed[1])
+	}
+}
+
+func TestStripMarkdownAndRiskLevel(t *testing.T) {
+	raw := "```json\n{\"impact_score\": 72}\n```"
+	got := stripMarkdownCodeFences(raw)
+	if got != `{"impact_score": 72}` {
+		t.Errorf("stripMarkdownCodeFences = %q", got)
+	}
+	if lvl := normalizeRiskLevel("", 90); lvl != "Berbahaya" {
+		t.Errorf("normalizeRiskLevel(90) = %q, want Berbahaya", lvl)
 	}
 }

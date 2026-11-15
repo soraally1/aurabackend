@@ -6,17 +6,19 @@ import (
 
 // Session represents an active or completed tracking session.
 type Session struct {
-	ID            string     `firestore:"id" json:"id"`
-	UserID        string     `firestore:"user_id" json:"user_id"`
-	SessionName   string     `firestore:"session_name" json:"session_name"`
-	Status        string     `firestore:"status" json:"status"` // "active", "completed"
-	StartedAt     time.Time  `firestore:"started_at" json:"started_at"`
-	EndedAt       *time.Time `firestore:"ended_at,omitempty" json:"ended_at,omitempty"`
-	StartLocation Location   `firestore:"start_location" json:"start_location"`
-	EndLocation   *Location  `firestore:"end_location,omitempty" json:"end_location,omitempty"`
-	Waypoints     []Waypoint `firestore:"waypoints,omitempty" json:"waypoints,omitempty"`
-	CreatedAt     time.Time  `firestore:"created_at" json:"created_at"`
-	UpdatedAt     time.Time  `firestore:"updated_at" json:"updated_at"`
+	ID            string          `firestore:"id" json:"id"`
+	UserID        string          `firestore:"user_id" json:"user_id"`
+	SessionName   string          `firestore:"session_name" json:"session_name"`
+	Status        string          `firestore:"status" json:"status"` // "active", "completed"
+	StartedAt     time.Time       `firestore:"started_at" json:"started_at"`
+	EndedAt       *time.Time      `firestore:"ended_at,omitempty" json:"ended_at,omitempty"`
+	StartLocation Location        `firestore:"start_location" json:"start_location"`
+	EndLocation   *Location       `firestore:"end_location,omitempty" json:"end_location,omitempty"`
+	Waypoints     []Waypoint      `firestore:"waypoints,omitempty" json:"waypoints,omitempty"`
+	Stats         *SessionStats   `firestore:"stats,omitempty" json:"stats,omitempty"`
+	Analysis      *HealthAnalysis `firestore:"analysis,omitempty" json:"analysis,omitempty"`
+	CreatedAt     time.Time       `firestore:"created_at" json:"created_at"`
+	UpdatedAt     time.Time       `firestore:"updated_at" json:"updated_at"`
 }
 
 // Location represents a geographic point with timestamp.
@@ -36,6 +38,7 @@ type Waypoint struct {
 	Heading        float64   `firestore:"heading,omitempty" json:"heading,omitempty"`
 	Classification string    `firestore:"classification,omitempty" json:"classification,omitempty"` // "indoor", "outdoor"
 	IsStay         bool      `firestore:"is_stay,omitempty" json:"is_stay,omitempty"`
+	ZoneID         string    `firestore:"zone_id,omitempty" json:"zone_id,omitempty"`
 	ZoneName       string    `firestore:"zone_name,omitempty" json:"zone_name,omitempty"`
 	AQI            int       `firestore:"aqi,omitempty" json:"aqi,omitempty"`
 	PM25           float64   `firestore:"pm2_5,omitempty" json:"pm2_5,omitempty"`

@@ -4,15 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"cloud.google.com/go/firestore"
+	"google.golang.org/api/iterator"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 var ErrNotFound = errors.New("session not found")
 var ErrSessionEnded = errors.New("session already ended")
+
+// wibLocation represents Asia/Jakarta (UTC+7) for daily history date boundaries.
+var wibLocation = time.FixedZone("WIB", 7*3600)
 
 // Store manages persistence of tracking sessions in Firestore.
 type Store struct {
@@ -54,21 +59,33 @@ func (s *Store) GetSession(ctx context.Context, sessionID string) (*Session, err
 
 // UpdateWaypoints appends waypoints to a session and updates the modified timestamp.
 func (s *Store) UpdateWaypoints(ctx context.Context, sessionID string, waypoints []Waypoint) error {
+	_, err := s.AppendWaypoints(ctx, sessionID, waypoints)
+	return err
+}
+
+// AppendWaypoints appends waypoints to a session and returns the new total waypoint count.
+func (s *Store) AppendWaypoints(ctx context.Context, sessionID string, waypoints []Waypoint) (int, error) {
 	session, err := s.GetSession(ctx, sessionID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	if session.Status != "active" {
-		return ErrSessionEnded
+		return 0, ErrSessionEnded
 	}
 
-	// Append new waypoints
 	session.Waypoints = append(session.Waypoints, waypoints...)
 	session.UpdatedAt = time.Now().UTC()
 
-	_, err = s.col.Doc(sessionID).Set(ctx, session)
-	return err
+	updatePaths := []firestore.Update{
+		{Path: "waypoints", Value: session.Waypoints},
+		{Path: "updated_at", Value: session.UpdatedAt},
+	}
+
+	if _, err := s.col.Doc(sessionID).Update(ctx, updatePaths); err != nil {
+		return 0, err
+	}
+	return len(session.Waypoints), nil
 }
 
 // EndSession marks a session as completed with stats and analysis.
@@ -82,17 +99,16 @@ func (s *Store) EndSession(ctx context.Context, sessionID string, endLocation Lo
 		return ErrSessionEnded
 	}
 
-	session.Status = "completed"
-	session.EndLocation = &endLocation
-	session.EndedAt = &endLocation.Timestamp
-	session.UpdatedAt = time.Now().UTC()
+	if stats.WorstAreaName == "" {
+		stats.WorstAreaName = "-"
+	}
 
-	// Store stats and analysis in separate fields for direct access in responses
+	now := time.Now().UTC()
 	updatePaths := []firestore.Update{
 		{Path: "status", Value: "completed"},
 		{Path: "end_location", Value: endLocation},
 		{Path: "ended_at", Value: endLocation.Timestamp},
-		{Path: "updated_at", Value: session.UpdatedAt},
+		{Path: "updated_at", Value: now},
 		{Path: "stats", Value: stats},
 		{Path: "analysis", Value: analysis},
 	}
@@ -101,30 +117,24 @@ func (s *Store) EndSession(ctx context.Context, sessionID string, endLocation Lo
 	return err
 }
 
-// GetSessionsByDate retrieves all sessions for a user on a specific date.
+// GetSessionsByDate retrieves all sessions for a user on a specific date (WIB / UTC+7).
+// Queries by user_id (single-field index) and filters/sorts in Go to avoid Firestore composite index errors.
 func (s *Store) GetSessionsByDate(ctx context.Context, userID string, dateStr string) ([]Session, error) {
-	// Parse date to time range
 	date, err := time.Parse("2006-01-02", dateStr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid date format: %w", err)
 	}
 
-	startOfDay := date.UTC()
+	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, wibLocation).UTC()
 	endOfDay := startOfDay.Add(24 * time.Hour)
 
-	query := s.col.
-		Where("user_id", "==", userID).
-		Where("started_at", ">=", startOfDay).
-		Where("started_at", "<", endOfDay).
-		OrderBy("started_at", firestore.Asc)
-
-	iter := query.Documents(ctx)
+	iter := s.col.Where("user_id", "==", userID).Documents(ctx)
 	defer iter.Stop()
 
-	var sessions []Session
+	sessions := make([]Session, 0)
 	for {
 		doc, err := iter.Next()
-		if err.Error() == "no more documents" {
+		if errors.Is(err, iterator.Done) {
 			break
 		}
 		if err != nil {
@@ -132,10 +142,19 @@ func (s *Store) GetSessionsByDate(ctx context.Context, userID string, dateStr st
 		}
 
 		var session Session
-		if err := doc.DataTo(&session); err == nil {
+		if err := doc.DataTo(&session); err != nil {
+			continue
+		}
+
+		startedUTC := session.StartedAt.UTC()
+		if !startedUTC.Before(startOfDay) && startedUTC.Before(endOfDay) {
 			sessions = append(sessions, session)
 		}
 	}
+
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].StartedAt.Before(sessions[j].StartedAt)
+	})
 
 	return sessions, nil
 }

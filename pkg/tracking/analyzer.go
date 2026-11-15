@@ -7,40 +7,73 @@ import (
 	"math"
 	"time"
 
+	"aurabackend/pkg/openmeteo"
 	"aurabackend/pkg/zones"
 )
 
+type semarangHotspot struct {
+	ID      string
+	Name    string
+	Lat     float64
+	Lon     float64
+	BaseAQI int
+	PM25    float64
+}
+
+var semarangReferenceHotspots = []semarangHotspot{
+	{ID: "zone_smg_kaligawe", Name: "Kawasan Industri Kaligawe", Lat: -6.9587, Lon: 110.4578, BaseAQI: 154, PM25: 61.2},
+	{ID: "zone_smg_simpang_lima", Name: "Simpang Lima Semarang", Lat: -6.9893, Lon: 110.4229, BaseAQI: 132, PM25: 48.5},
+	{ID: "zone_smg_tugu_muda", Name: "Bundaran Tugu Muda", Lat: -6.9840, Lon: 110.4093, BaseAQI: 125, PM25: 45.0},
+	{ID: "zone_smg_peterongan", Name: "Simpang Peterongan", Lat: -6.9996, Lon: 110.4320, BaseAQI: 118, PM25: 42.5},
+	{ID: "zone_smg_krapyak", Name: "Gerbang Tol Krapyak", Lat: -6.9850, Lon: 110.3600, BaseAQI: 142, PM25: 53.0},
+	{ID: "zone_smg_banyumanik", Name: "Kawasan Banyumanik - Setiabudi", Lat: -7.0650, Lon: 110.4180, BaseAQI: 95, PM25: 33.0},
+	{ID: "zone_smg_kariadi", Name: "Kawasan RSUP Dr. Kariadi - Sutomo", Lat: -6.9934, Lon: 110.4087, BaseAQI: 88, PM25: 29.5},
+}
+
+// UserProfileContext holds optional sensitivity metadata for personalized AI analysis.
+type UserProfileContext struct {
+	Name         string
+	Usia         int
+	WaktuDiJalan float64
+}
+
 // Analyzer processes waypoints and enriches them with zone and pollution data.
 type Analyzer struct {
-	zoneStore  *zones.Store
-	groqClient *GroqClient
+	zoneStore       *zones.Store
+	openMeteoClient *openmeteo.Client
+	groqClient      *GroqClient
 }
 
 // NewAnalyzer creates a new waypoint analyzer without Groq support.
 func NewAnalyzer(zoneStore *zones.Store) *Analyzer {
 	return &Analyzer{
-		zoneStore: zoneStore,
+		zoneStore:       zoneStore,
+		openMeteoClient: openmeteo.NewClient(),
 	}
 }
 
 // NewAnalyzerWithGroq creates a waypoint analyzer with Groq AI support.
 func NewAnalyzerWithGroq(zoneStore *zones.Store, groqClient *GroqClient) *Analyzer {
 	return &Analyzer{
-		zoneStore:  zoneStore,
-		groqClient: groqClient,
+		zoneStore:       zoneStore,
+		openMeteoClient: openmeteo.NewClient(),
+		groqClient:      groqClient,
 	}
 }
 
 // ProcessWaypoints enriches waypoints with zone and AQI data, and classifies as indoor/outdoor.
 func (a *Analyzer) ProcessWaypoints(ctx context.Context, waypoints []Waypoint) []Waypoint {
+	return a.ProcessWaypointsWithContext(ctx, waypoints, nil)
+}
+
+// ProcessWaypointsWithContext enriches incremental waypoint batches using an optional previous
+// session waypoint as anchor context for stationary indoor stay detection.
+func (a *Analyzer) ProcessWaypointsWithContext(ctx context.Context, waypoints []Waypoint, prevAnchor *Waypoint) []Waypoint {
 	if len(waypoints) == 0 {
 		return waypoints
 	}
 
-	// Classify indoor/outdoor and calculate durations
-	a.classifyWaypoints(waypoints)
-
-	// Match waypoints with pollution zones
+	a.classifyWaypointsWithAnchor(waypoints, prevAnchor)
 	a.enrichWithZoneData(ctx, waypoints)
 
 	return waypoints
@@ -48,50 +81,140 @@ func (a *Analyzer) ProcessWaypoints(ctx context.Context, waypoints []Waypoint) [
 
 // classifyWaypoints determines if each waypoint is indoor or outdoor based on movement patterns.
 func (a *Analyzer) classifyWaypoints(waypoints []Waypoint) {
-	for i := range waypoints {
-		if i == 0 {
-			waypoints[i].Classification = "outdoor"
-			continue
-		}
+	a.classifyWaypointsWithAnchor(waypoints, nil)
+}
 
-		prevWP := waypoints[i-1]
+func (a *Analyzer) classifyWaypointsWithAnchor(waypoints []Waypoint, prevAnchor *Waypoint) {
+	if len(waypoints) == 0 {
+		return
+	}
+
+	var anchor Waypoint
+	if prevAnchor != nil {
+		anchor = *prevAnchor
+	} else {
+		anchor = waypoints[0]
+		waypoints[0].Classification = "outdoor"
+		waypoints[0].IsStay = false
+	}
+
+	startIdx := 1
+	if prevAnchor != nil {
+		startIdx = 0
+	}
+
+	for i := startIdx; i < len(waypoints); i++ {
 		currWP := waypoints[i]
+		distanceKm := haversineDistance(anchor.Latitude, anchor.Longitude, currWP.Latitude, currWP.Longitude)
+		stayDurationMin := currWP.Timestamp.Sub(anchor.Timestamp).Minutes()
 
-		// Calculate distance from previous waypoint
-		distance := haversineDistance(prevWP.Latitude, prevWP.Longitude, currWP.Latitude, currWP.Longitude)
-
-		// Calculate duration since previous waypoint
-		duration := currWP.Timestamp.Sub(prevWP.Timestamp).Minutes()
-
-		// If distance < 60m and stayed for >= 20 minutes, classify as indoor
-		if distance < 0.06 && duration >= 20 { // 0.06 km = 60 m
+		// Stayed within 60m of cluster anchor for >= 20 minutes -> indoor stay
+		if distanceKm < 0.06 && stayDurationMin >= 20 {
 			waypoints[i].Classification = "indoor"
 			waypoints[i].IsStay = true
 		} else {
 			waypoints[i].Classification = "outdoor"
 			waypoints[i].IsStay = false
+			if distanceKm >= 0.06 {
+				anchor = currWP
+			}
 		}
 	}
 }
 
-// enrichWithZoneData matches each waypoint with nearby pollution zones.
+// enrichWithZoneData matches each waypoint with Firestore zones, Semarang hotspots, or live Open-Meteo AQI.
 func (a *Analyzer) enrichWithZoneData(ctx context.Context, waypoints []Waypoint) {
+	if len(waypoints) == 0 {
+		return
+	}
+
+	// Load Firestore zones once per batch to avoid N+1 Firestore queries
+	var allZones []zones.Zone
+	if a.zoneStore != nil {
+		loaded, err := a.zoneStore.ListAll(ctx)
+		if err == nil {
+			allZones = loaded
+		}
+	}
+
+	// Lazy-fetch live Open-Meteo AQI at most once per batch if needed as fallback
+	var liveFetched bool
+	var liveAQI int
+	var livePM25 float64
+
+	getLiveEnv := func(lat, lon float64) (int, float64) {
+		if liveFetched {
+			return liveAQI, livePM25
+		}
+		liveFetched = true
+		liveAQI = 65
+		livePM25 = 22.0
+		if a.openMeteoClient != nil {
+			aq, err := a.openMeteoClient.FetchAirQuality(ctx, lat, lon)
+			if err == nil && aq != nil && aq.Current.USAQI > 0 {
+				liveAQI = aq.Current.USAQI
+				livePM25 = math.Round(aq.Current.PM25*10) / 10
+			}
+		}
+		return liveAQI, livePM25
+	}
+
 	for i := range waypoints {
-		// Search for zones within 1 km
-		zones, err := a.zoneStore.FindNearby(ctx, waypoints[i].Latitude, waypoints[i].Longitude, 1.0)
-		if err != nil || len(zones) == 0 {
-			// No zone found, use default values
-			waypoints[i].ZoneName = "Umum"
-			waypoints[i].AQI = 50
-			waypoints[i].PM25 = 20
+		lat, lon := waypoints[i].Latitude, waypoints[i].Longitude
+
+		// 1. Closest Firestore zone within 2.5 km
+		var bestZone *zones.Zone
+		bestZoneDist := 2.5
+		for idx := range allZones {
+			d := haversineDistance(lat, lon, allZones[idx].Latitude, allZones[idx].Longitude)
+			if d <= bestZoneDist {
+				bestZoneDist = d
+				bestZone = &allZones[idx]
+			}
+		}
+
+		if bestZone != nil {
+			waypoints[i].ZoneID = bestZone.ID
+			waypoints[i].ZoneName = bestZone.Name
+			if bestZone.LastSnapshot != nil && bestZone.LastSnapshot.USAQI > 0 {
+				waypoints[i].AQI = bestZone.LastSnapshot.USAQI
+				waypoints[i].PM25 = math.Round(bestZone.LastSnapshot.PM25*10) / 10
+			} else if bestZone.CongestionIndex > 0 {
+				aqi := int(bestZone.CongestionIndex*1.3) + 40
+				waypoints[i].AQI = aqi
+				waypoints[i].PM25 = math.Round(((float64(aqi)/150.0)*55.0)*10) / 10
+			} else {
+				aqi, pm25 := getLiveEnv(lat, lon)
+				waypoints[i].AQI = aqi
+				waypoints[i].PM25 = pm25
+			}
 			continue
 		}
 
-		// Use the closest zone
-		closest := zones[0]
-		waypoints[i].ZoneName = closest.Zone.Name
-		waypoints[i].AQI = closest.AirQuality.USAQI
-		waypoints[i].PM25 = closest.AirQuality.PM25
+		// 2. Closest Semarang reference hotspot within 4.0 km
+		var bestHotspot *semarangHotspot
+		bestHotspotDist := 4.0
+		for idx := range semarangReferenceHotspots {
+			d := haversineDistance(lat, lon, semarangReferenceHotspots[idx].Lat, semarangReferenceHotspots[idx].Lon)
+			if d <= bestHotspotDist {
+				bestHotspotDist = d
+				bestHotspot = &semarangReferenceHotspots[idx]
+			}
+		}
+
+		if bestHotspot != nil {
+			waypoints[i].ZoneID = bestHotspot.ID
+			waypoints[i].ZoneName = bestHotspot.Name
+			waypoints[i].AQI = bestHotspot.BaseAQI
+			waypoints[i].PM25 = bestHotspot.PM25
+			continue
+		}
+
+		// 3. Live Open-Meteo fallback (or clean Semarang suburban baseline)
+		aqi, pm25 := getLiveEnv(lat, lon)
+		waypoints[i].ZoneName = "Wilayah Semarang"
+		waypoints[i].AQI = aqi
+		waypoints[i].PM25 = pm25
 	}
 }
 
@@ -99,14 +222,18 @@ func (a *Analyzer) enrichWithZoneData(ctx context.Context, waypoints []Waypoint)
 func CalculateStats(waypoints []Waypoint, startedAt, endedAt time.Time) SessionStats {
 	stats := SessionStats{
 		WaypointsProcessed: len(waypoints),
+		WorstAreaName:      "-",
 	}
+
+	duration := endedAt.Sub(startedAt).Minutes()
+	if duration < 0 {
+		duration = 0
+	}
+	stats.DurationMinutes = math.Round(duration*10) / 10
 
 	if len(waypoints) == 0 {
 		return stats
 	}
-
-	// Calculate duration
-	stats.DurationMinutes = endedAt.Sub(startedAt).Minutes()
 
 	// Calculate distance (haversine between all consecutive waypoints)
 	var totalDistanceKm float64
@@ -117,22 +244,25 @@ func CalculateStats(waypoints []Waypoint, startedAt, endedAt time.Time) SessionS
 			waypoints[i].Latitude,
 			waypoints[i].Longitude,
 		)
-		totalDistanceKm += dist
+		// Filter unrealistic GPS teleportation jumps (> 5 km between consecutive points)
+		if dist <= 5.0 {
+			totalDistanceKm += dist
+		}
 	}
-	stats.DistanceKm = totalDistanceKm
+	stats.DistanceKm = math.Round(totalDistanceKm*100) / 100
 
-	// Aggregate indoor/outdoor time and pollution metrics
+	// Aggregate indoor/outdoor metrics
 	var outdoorCount, indoorCount int
 	var aqiSum, pm25Sum float64
 	maxAQI := 0
-	worstIdx := 0
+	worstIdx := -1
 
 	for i, wp := range waypoints {
-		if wp.Classification == "outdoor" {
+		if wp.Classification != "indoor" {
 			outdoorCount++
 			aqiSum += float64(wp.AQI)
 			pm25Sum += wp.PM25
-			if wp.AQI > maxAQI {
+			if wp.AQI >= maxAQI {
 				maxAQI = wp.AQI
 				worstIdx = i
 			}
@@ -141,28 +271,21 @@ func CalculateStats(waypoints []Waypoint, startedAt, endedAt time.Time) SessionS
 		}
 	}
 
-	// Calculate averages
 	if outdoorCount > 0 {
-		stats.AverageOutdoorAQI = aqiSum / float64(outdoorCount)
-		stats.AverageOutdoorPM25 = pm25Sum / float64(outdoorCount)
+		stats.AverageOutdoorAQI = math.Round((aqiSum/float64(outdoorCount))*10) / 10
+		stats.AverageOutdoorPM25 = math.Round((pm25Sum/float64(outdoorCount))*10) / 10
 	}
 	stats.MaxAQI = maxAQI
 
-	// Find worst area
-	if worstIdx < len(waypoints) {
+	if worstIdx >= 0 && worstIdx < len(waypoints) && waypoints[worstIdx].ZoneName != "" {
 		stats.WorstAreaName = waypoints[worstIdx].ZoneName
 		stats.WorstAreaAQI = waypoints[worstIdx].AQI
-	} else {
-		stats.WorstAreaName = "-"
 	}
 
-	// Calculate indoor/outdoor minutes (distribute duration by waypoint count)
-	minutesPerWaypoint := 0.0
-	if len(waypoints) > 0 {
-		minutesPerWaypoint = stats.DurationMinutes / float64(len(waypoints))
-	}
-	stats.TotalOutdoorMinutes = float64(outdoorCount) * minutesPerWaypoint
-	stats.TotalIndoorMinutes = float64(indoorCount) * minutesPerWaypoint
+	// Calculate indoor/outdoor minutes (distribute total duration across waypoints)
+	minutesPerWaypoint := stats.DurationMinutes / float64(len(waypoints))
+	stats.TotalOutdoorMinutes = math.Round(float64(outdoorCount)*minutesPerWaypoint*10) / 10
+	stats.TotalIndoorMinutes = math.Round(float64(indoorCount)*minutesPerWaypoint*10) / 10
 
 	return stats
 }
@@ -174,12 +297,16 @@ func GenerateHealthAnalysis(stats SessionStats) HealthAnalysis {
 
 // GenerateHealthAnalysisWithGroq uses Groq AI if available, falls back to rule-based analysis.
 func (a *Analyzer) GenerateHealthAnalysisWithGroq(ctx context.Context, stats SessionStats) HealthAnalysis {
+	return a.GenerateHealthAnalysisWithUser(ctx, stats, nil)
+}
+
+// GenerateHealthAnalysisWithUser uses Groq AI with optional user sensitivity context.
+func (a *Analyzer) GenerateHealthAnalysisWithUser(ctx context.Context, stats SessionStats, userCtx *UserProfileContext) HealthAnalysis {
 	if a.groqClient == nil {
 		return generateHealthAnalysisRuleBased(stats)
 	}
 
-	// Try Groq first, fall back to rule-based if it fails
-	analysis, err := a.groqClient.AnalyzeExposureWithGroq(ctx, stats)
+	analysis, err := a.groqClient.AnalyzeExposureWithUserGroq(ctx, stats, userCtx)
 	if err != nil {
 		log.Printf("[Tracking] Groq analysis error, using rule-based fallback: %v", err)
 		return generateHealthAnalysisRuleBased(stats)

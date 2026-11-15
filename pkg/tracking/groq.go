@@ -56,52 +56,64 @@ type groqResponse struct {
 
 // AnalyzeExposureWithGroq sends the aggregated session stats to Groq's LLM model.
 func (g *GroqClient) AnalyzeExposureWithGroq(ctx context.Context, stats SessionStats) (HealthAnalysis, error) {
+	return g.AnalyzeExposureWithUserGroq(ctx, stats, nil)
+}
+
+// AnalyzeExposureWithUserGroq sends aggregated session stats and optional user profile context to Groq.
+func (g *GroqClient) AnalyzeExposureWithUserGroq(ctx context.Context, stats SessionStats, userCtx *UserProfileContext) (HealthAnalysis, error) {
 	if g.apiKey == "" {
-		// Return rule-based analysis if no API key
 		return generateHealthAnalysisRuleBased(stats), nil
 	}
 
 	systemPrompt := `Anda adalah dokter spesialis paru (pulmonologi) dan kedokteran okupasi dari platform AURA Health.
-Tugas Anda adalah mengevaluasi data mobilitas harian dan paparan polusi udara pengguna, lalu memberikan diagnosa medis ramah, terpercaya, dan solutif.
+Tugas Anda adalah mengevaluasi data mobilitas dan paparan polusi udara pengguna, lalu memberikan ringkasan dampak kesehatan serta saran perawatan pasca perjalanan yang ramah dan terpercaya.
 Kembalikan HANYA format JSON valid tanpa tanda backtick atau markdown pembungkus. Format JSON yang wajib dipenuhi:
 {
   "impact_score": <number float 0-100>,
   "risk_level": "<Rendah|Sedang|Tinggi|Berbahaya>",
-  "summary": "<1-2 kalimat ringkasan kondisi pernapasan hari ini>",
+  "summary": "<1-2 kalimat ringkasan kondisi pernapasan hari ini dalam Bahasa Indonesia>",
   "recommendations": [
-    "<langkah pencegahan medis konkret 1>",
-    "<langkah pencegahan medis konkret 2>",
-    "<langkah pencegahan medis konkret 3>",
-    "<langkah pencegahan medis konkret 4>"
+    "<langkah perawatan pasca perjalanan 1>",
+    "<langkah perawatan pasca perjalanan 2>",
+    "<langkah perawatan pasca perjalanan 3>",
+    "<langkah perawatan pasca perjalanan 4>"
   ]
 }`
 
-	userPrompt := fmt.Sprintf(`Berikut data mobilitas dan polusi harian pengguna di Kota Semarang:
+	profileInfo := ""
+	if userCtx != nil && (userCtx.Usia > 0 || userCtx.WaktuDiJalan > 0) {
+		profileInfo = fmt.Sprintf("\n- Profil Pengguna: Usia %d tahun, rata-rata waktu di jalan %.1f jam/hari", userCtx.Usia, userCtx.WaktuDiJalan)
+	}
+
+	userPrompt := fmt.Sprintf(`Berikut data perjalanan dan paparan polusi pengguna di Kota Semarang:
 - Total Waktu Luar Ruangan (Outdoor/Jalan): %.1f menit (%.2f jam)
 - Total Waktu Dalam Ruangan (Indoor/Stay): %.1f menit (%.2f jam)
 - Rata-rata AQI Outdoor: %.1f
 - Rata-rata PM2.5 Outdoor: %.1f µg/m³
+- AQI Maksimum yang Dilewati: %d
 - Area dengan Polusi Terburuk yang Dilewati: %s (AQI: %d)
 - Jumlah Titik Waypoint Dianalisis: %d
 - Jarak Total Perjalanan: %.2f km
-- Durasi Total: %.1f menit
+- Durasi Total: %.1f menit%s
 
-Berikan skor dampak polusi 0-100, level risiko, penjelasan ringkas, serta 3-4 rekomendasi pencegahan praktis.`,
+Berikan skor dampak polusi 0-100, level risiko, penjelasan ringkas, serta 3-4 tips perawatan pasca perjalanan praktis.`,
 		stats.TotalOutdoorMinutes, stats.TotalOutdoorMinutes/60.0,
 		stats.TotalIndoorMinutes, stats.TotalIndoorMinutes/60.0,
 		stats.AverageOutdoorAQI,
 		stats.AverageOutdoorPM25,
+		stats.MaxAQI,
 		stats.WorstAreaName, stats.WorstAreaAQI,
 		stats.WaypointsProcessed,
 		stats.DistanceKm,
 		stats.DurationMinutes,
+		profileInfo,
 	)
 
 	modelsToTry := []string{
 		g.model,
 		"openai/gpt-oss-120b",
 		"openai/gpt-oss-20b",
-		"qwen/qwen3.8-27b",
+		"llama-3.1-8b-instant",
 	}
 
 	for _, modelName := range modelsToTry {
@@ -164,23 +176,17 @@ func (g *GroqClient) callGroqModel(ctx context.Context, modelName, systemPrompt,
 	}
 
 	var diagnosis HealthAnalysis
-	content := strings.TrimSpace(gResp.Choices[0].Message.Content)
+	content := stripMarkdownCodeFences(strings.TrimSpace(gResp.Choices[0].Message.Content))
 	if err := json.Unmarshal([]byte(content), &diagnosis); err != nil {
 		return HealthAnalysis{}, fmt.Errorf("json unmarshal error: %w", err)
 	}
 
 	// Validate response
-	if diagnosis.ImpactScore < 0 || diagnosis.ImpactScore > 100 {
-		diagnosis.ImpactScore = generateHealthAnalysisRuleBased(SessionStats{
-			TotalOutdoorMinutes: 0,
-			AverageOutdoorAQI:   0,
-			MaxAQI:              0,
-		}).ImpactScore
+	if diagnosis.ImpactScore <= 0 || diagnosis.ImpactScore > 100 {
+		diagnosis.ImpactScore = generateHealthAnalysisRuleBased(statsFallbackFromScore(diagnosis.ImpactScore)).ImpactScore
 	}
 
-	if diagnosis.RiskLevel == "" {
-		diagnosis.RiskLevel = "Sedang"
-	}
+	diagnosis.RiskLevel = normalizeRiskLevel(diagnosis.RiskLevel, diagnosis.ImpactScore)
 
 	if diagnosis.Summary == "" {
 		diagnosis.Summary = "Analisis polusi hari ini menunjukkan paparan moderat."
@@ -188,11 +194,49 @@ func (g *GroqClient) callGroqModel(ctx context.Context, modelName, systemPrompt,
 
 	if len(diagnosis.Recommendations) == 0 {
 		diagnosis.Recommendations = []string{
+			"Bersihkan wajah dengan air mengalir dan pembersih lembut",
+			"Minum air putih minimal 300ml untuk hidrasi",
 			"Gunakan masker saat beraktivitas di luar ruangan",
-			"Perbanyak minum air putih",
-			"Hindari aktivitas berat di zona polusi tinggi",
 		}
 	}
 
 	return diagnosis, nil
+}
+
+func stripMarkdownCodeFences(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "```") {
+		if idx := strings.Index(s, "\n"); idx != -1 {
+			s = s[idx+1:]
+		}
+		if end := strings.LastIndex(s, "```"); end != -1 {
+			s = s[:end]
+		}
+	}
+	return strings.TrimSpace(s)
+}
+
+func normalizeRiskLevel(raw string, score float64) string {
+	switch strings.TrimSpace(raw) {
+	case "Rendah", "Sedang", "Tinggi", "Berbahaya":
+		return strings.TrimSpace(raw)
+	default:
+		if score < 38.0 {
+			return "Rendah"
+		}
+		if score < 68.0 {
+			return "Sedang"
+		}
+		if score < 88.0 {
+			return "Tinggi"
+		}
+		return "Berbahaya"
+	}
+}
+
+func statsFallbackFromScore(score float64) SessionStats {
+	if score > 100 {
+		return SessionStats{TotalOutdoorMinutes: 120, AverageOutdoorAQI: 180, MaxAQI: 180}
+	}
+	return SessionStats{TotalOutdoorMinutes: 0, AverageOutdoorAQI: 0, MaxAQI: 0}
 }
