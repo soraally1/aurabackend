@@ -127,6 +127,19 @@ func newRouter() http.Handler {
 	mux.Handle("GET /api/tracking/daily-history", protected(handlers.DailyHistory))
 	mux.Handle("GET /tracking/daily-history", protected(handlers.DailyHistory))
 
+	// Registration Dynamic Voice Conversation Agent (Groq Whisper STT + Llama LLM)
+	mux.HandleFunc("POST /api/agent/transcribe", handlers.AgentTranscribe)
+	mux.HandleFunc("POST /agent/transcribe", handlers.AgentTranscribe)
+	mux.HandleFunc("POST /api/v1/agent/transcribe", handlers.AgentTranscribe)
+
+	mux.HandleFunc("POST /api/agent/registration-chat", handlers.AgentRegistrationChat)
+	mux.HandleFunc("POST /agent/registration-chat", handlers.AgentRegistrationChat)
+	mux.HandleFunc("POST /api/v1/agent/registration-chat", handlers.AgentRegistrationChat)
+
+	mux.HandleFunc("POST /api/agent/voice-turn", handlers.AgentVoiceTurn)
+	mux.HandleFunc("POST /agent/voice-turn", handlers.AgentVoiceTurn)
+	mux.HandleFunc("POST /api/v1/agent/voice-turn", handlers.AgentVoiceTurn)
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "Route not found")
 	})
