@@ -221,15 +221,15 @@ func TestProcessWaypointsWithContextAndEnrichment(t *testing.T) {
 	if processed[0].Classification != "indoor" || !processed[0].IsStay {
 		t.Errorf("expected first batch waypoint to be indoor stay relative to prevAnchor, got %+v", processed[0])
 	}
-	if processed[0].AQI <= 100 || processed[0].ZoneName == "" {
-		t.Errorf("expected Kaligawe hotspot enrichment with AQI > 100, got %+v", processed[0])
+	if processed[0].AQI <= 0 || processed[0].ZoneName == "" {
+		t.Errorf("expected dynamic scraped enrichment with AQI > 0 and non-empty ZoneName, got %+v", processed[0])
 	}
 
 	if processed[1].Classification != "outdoor" || processed[1].IsStay {
 		t.Errorf("expected second batch waypoint to be outdoor, got %+v", processed[1])
 	}
-	if processed[1].AQI <= 100 || processed[1].ZoneName != "Simpang Lima Semarang" {
-		t.Errorf("expected Simpang Lima enrichment, got %+v", processed[1])
+	if processed[1].AQI <= 0 || processed[1].ZoneName == "" {
+		t.Errorf("expected dynamic scraped enrichment for second waypoint, got %+v", processed[1])
 	}
 }
 

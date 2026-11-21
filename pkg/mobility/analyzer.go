@@ -5,46 +5,25 @@ import (
 	"math"
 	"time"
 
-	"aurabackend/pkg/geoutils"
+	"aurabackend/pkg/mapscraper"
 	"aurabackend/pkg/openmeteo"
 	"aurabackend/pkg/zones"
 )
 
-// KnownSemarangHotspots provides reference pollution baselines for major traffic nodes.
-type Hotspot struct {
-	Name    string
-	Lat     float64
-	Lon     float64
-	BaseAQI int
-	PM25    float64
-}
-
-var semarangHotspots = []Hotspot{
-	{Name: "Kawasan POJ City (Pearl of Java)", Lat: -6.9472, Lon: 110.3882, BaseAQI: 78, PM25: 24.5},
-	{Name: "Pantai Marina Semarang", Lat: -6.9488, Lon: 110.3895, BaseAQI: 80, PM25: 25.2},
-	{Name: "Kawasan Puri Anjasmoro", Lat: -6.9688, Lon: 110.3905, BaseAQI: 94, PM25: 32.0},
-	{Name: "Jalan Madukoro Raya", Lat: -6.9625, Lon: 110.3914, BaseAQI: 102, PM25: 35.8},
-	{Name: "Jalan Siliwangi - Kalibanteng", Lat: -6.9852, Lon: 110.3821, BaseAQI: 112, PM25: 40.2},
-	{Name: "Kawasan Industri Kaligawe", Lat: -6.9587, Lon: 110.4578, BaseAQI: 154, PM25: 61.2},
-	{Name: "Simpang Lima Semarang", Lat: -6.9893, Lon: 110.4229, BaseAQI: 132, PM25: 48.5},
-	{Name: "Bundaran Tugu Muda", Lat: -6.9840, Lon: 110.4093, BaseAQI: 125, PM25: 45.0},
-	{Name: "Simpang Peterongan", Lat: -6.9996, Lon: 110.4320, BaseAQI: 118, PM25: 42.5},
-	{Name: "Kawasan Banyumanik - Setiabudi", Lat: -7.0650, Lon: 110.4180, BaseAQI: 95, PM25: 33.0},
-	{Name: "Kawasan RSUP Dr. Kariadi - Sutomo", Lat: -6.9934, Lon: 110.4087, BaseAQI: 88, PM25: 29.5},
-}
-
-// Analyzer processes mobility waypoints, classifies stay vs travel, and performs spatial matching.
+// Analyzer processes mobility waypoints, classifies stay vs travel, and performs dynamic map scraping & spatial matching.
 type Analyzer struct {
 	zoneStore       *zones.Store
 	openMeteoClient *openmeteo.Client
+	mapScraper      *mapscraper.Client
 	groqClient      *GroqClient
 }
 
-// NewAnalyzer creates a new Analyzer instance.
+// NewAnalyzer creates a new Analyzer instance backed by dynamic Google Maps scraping and live Open-Meteo telemetry.
 func NewAnalyzer(zoneStore *zones.Store, groqClient *GroqClient) *Analyzer {
 	return &Analyzer{
 		zoneStore:       zoneStore,
 		openMeteoClient: openmeteo.NewClient(),
+		mapScraper:      mapscraper.NewClient(),
 		groqClient:      groqClient,
 	}
 }
@@ -67,7 +46,7 @@ func (a *Analyzer) Analyze(ctx context.Context, userID, dateStr string, waypoint
 	var outdoorDurationSum float64
 
 	worstAQI := 0
-	worstAreaName := "Kota Semarang"
+	worstAreaName := ""
 	worstAreaTimestamp := ""
 
 	for i, wp := range waypoints {
@@ -85,7 +64,7 @@ func (a *Analyzer) Analyze(ctx context.Context, userID, dateStr string, waypoint
 			totalOutdoorMin += w.DurationMinutes
 		}
 
-		// Step 2: Spatial Matching dengan Indeks Polusi Zona Semarang
+		// Step 2: Dynamic Spatial Matching via Firestore Zones + Real-Time Google Maps Scraping & Open-Meteo
 		matchedZone, aqi, pm25 := a.matchPollutionIndex(ctx, w.Latitude, w.Longitude)
 		if w.ZoneName == "" {
 			w.ZoneName = matchedZone
@@ -101,7 +80,7 @@ func (a *Analyzer) Analyze(ctx context.Context, userID, dateStr string, waypoint
 		if w.Classification == "outdoor" {
 			dur := w.DurationMinutes
 			if dur <= 0 {
-				dur = 5.0 // default sample duration if missing
+				dur = 5.0
 			}
 			outdoorAQISum += float64(w.AQI) * dur
 			outdoorPM25Sum += w.PM25 * dur
@@ -118,17 +97,23 @@ func (a *Analyzer) Analyze(ctx context.Context, userID, dateStr string, waypoint
 	}
 
 	// Compute averages
-	avgOutdoorAQI := 75.0
-	avgOutdoorPM25 := 25.0
+	avgOutdoorAQI := 72.0
+	avgOutdoorPM25 := 23.5
 	if outdoorDurationSum > 0 {
 		avgOutdoorAQI = math.Round((outdoorAQISum/outdoorDurationSum)*10) / 10
 		avgOutdoorPM25 = math.Round((outdoorPM25Sum/outdoorDurationSum)*10) / 10
 	} else if len(classifiedWaypoints) > 0 {
-		// All indoor
 		avgOutdoorAQI = 50.0
 		avgOutdoorPM25 = 15.0
-		worstAreaName = "Area Dalam Ruangan"
+		worstAreaName = classifiedWaypoints[0].ZoneName
+		if worstAreaName == "" {
+			worstAreaName = "Area Dalam Ruangan"
+		}
 		worstAQI = 50
+	}
+
+	if worstAreaName == "" && len(classifiedWaypoints) > 0 {
+		worstAreaName = classifiedWaypoints[0].ZoneName
 	}
 
 	stats := ExposureStats{
@@ -159,39 +144,30 @@ func (a *Analyzer) Analyze(ctx context.Context, userID, dateStr string, waypoint
 	}, nil
 }
 
-// matchPollutionIndex matches coordinate to Firestore zones or reference hotspots.
+// matchPollutionIndex dynamically resolves zone name and pollution index from Firestore or live Google Maps scraping.
 func (a *Analyzer) matchPollutionIndex(ctx context.Context, lat, lon float64) (string, int, float64) {
 	// 1. Try finding nearby Firestore zones if zoneStore is provided
 	if a.zoneStore != nil {
-		nearby, err := a.zoneStore.FindNearby(ctx, lat, lon, 2.5)
+		nearby, err := a.zoneStore.FindNearby(ctx, lat, lon, 1.8)
 		if err == nil && len(nearby) > 0 {
 			z := nearby[0].Zone
 			aqi := int(z.CongestionIndex*1.3) + 40
+			if z.LastSnapshot != nil && z.LastSnapshot.USAQI > 0 {
+				aqi = z.LastSnapshot.USAQI
+			}
 			pm25 := (float64(aqi) / 150.0) * 55.0
+			if z.LastSnapshot != nil && z.LastSnapshot.PM25 > 0 {
+				pm25 = z.LastSnapshot.PM25
+			}
 			return z.Name, aqi, math.Round(pm25*10) / 10
 		}
 	}
 
-	// 2. Spatial match with known reference hotspots in Semarang
-	closestName := "Pusat Kota Semarang"
-	minDist := math.MaxFloat64
-	bestAQI := 78
-	bestPM25 := 26.5
-
-	for _, h := range semarangHotspots {
-		dist := geoutils.HaversineDistance(lat, lon, h.Lat, h.Lon)
-		if dist < minDist {
-			minDist = dist
-			closestName = h.Name
-			bestAQI = h.BaseAQI
-			bestPM25 = h.PM25
-		}
+	// 2. Dynamic real-time Google Maps scraping + Open-Meteo Air Quality (Zero hardcoded hotspots)
+	scraper := a.mapScraper
+	if scraper == nil {
+		scraper = mapscraper.NewClient()
 	}
-
-	if minDist <= 4.0 {
-		return closestName, bestAQI, bestPM25
-	}
-
-	// Default baseline for general Semarang suburban area
-	return "Wilayah Semarang", 75, 25.0
+	scraped := scraper.ScrapeLocation(ctx, lat, lon, a.openMeteoClient)
+	return scraped.ZoneName, scraped.AQI, scraped.PM25
 }

@@ -7,32 +7,10 @@ import (
 	"math"
 	"time"
 
+	"aurabackend/pkg/mapscraper"
 	"aurabackend/pkg/openmeteo"
 	"aurabackend/pkg/zones"
 )
-
-type semarangHotspot struct {
-	ID      string
-	Name    string
-	Lat     float64
-	Lon     float64
-	BaseAQI int
-	PM25    float64
-}
-
-var semarangReferenceHotspots = []semarangHotspot{
-	{ID: "zone_smg_poj", Name: "Kawasan POJ City (Pearl of Java)", Lat: -6.9472, Lon: 110.3882, BaseAQI: 78, PM25: 24.5},
-	{ID: "zone_smg_marina", Name: "Pantai Marina Semarang", Lat: -6.9488, Lon: 110.3895, BaseAQI: 80, PM25: 25.2},
-	{ID: "zone_smg_anjasmoro", Name: "Kawasan Puri Anjasmoro", Lat: -6.9688, Lon: 110.3905, BaseAQI: 94, PM25: 32.0},
-	{ID: "zone_smg_madukoro", Name: "Jalan Madukoro Raya", Lat: -6.9625, Lon: 110.3914, BaseAQI: 102, PM25: 35.8},
-	{ID: "zone_smg_siliwangi", Name: "Jalan Siliwangi - Kalibanteng", Lat: -6.9852, Lon: 110.3821, BaseAQI: 112, PM25: 40.2},
-	{ID: "zone_smg_kaligawe", Name: "Kawasan Industri Kaligawe", Lat: -6.9587, Lon: 110.4578, BaseAQI: 154, PM25: 61.2},
-	{ID: "zone_smg_simpang_lima", Name: "Simpang Lima Semarang", Lat: -6.9893, Lon: 110.4229, BaseAQI: 132, PM25: 48.5},
-	{ID: "zone_smg_tugu_muda", Name: "Bundaran Tugu Muda", Lat: -6.9840, Lon: 110.4093, BaseAQI: 125, PM25: 45.0},
-	{ID: "zone_smg_peterongan", Name: "Simpang Peterongan", Lat: -6.9996, Lon: 110.4320, BaseAQI: 118, PM25: 42.5},
-	{ID: "zone_smg_banyumanik", Name: "Kawasan Banyumanik - Setiabudi", Lat: -7.0650, Lon: 110.4180, BaseAQI: 95, PM25: 33.0},
-	{ID: "zone_smg_kariadi", Name: "Kawasan RSUP Dr. Kariadi - Sutomo", Lat: -6.9934, Lon: 110.4087, BaseAQI: 88, PM25: 29.5},
-}
 
 // UserProfileContext holds optional sensitivity metadata for personalized AI analysis.
 type UserProfileContext struct {
@@ -41,10 +19,11 @@ type UserProfileContext struct {
 	WaktuDiJalan float64
 }
 
-// Analyzer processes waypoints and enriches them with zone and pollution data.
+// Analyzer processes waypoints and enriches them with dynamic Google Maps scraped place data and live pollution telemetry.
 type Analyzer struct {
 	zoneStore       *zones.Store
 	openMeteoClient *openmeteo.Client
+	mapScraper      *mapscraper.Client
 	groqClient      *GroqClient
 }
 
@@ -53,6 +32,7 @@ func NewAnalyzer(zoneStore *zones.Store) *Analyzer {
 	return &Analyzer{
 		zoneStore:       zoneStore,
 		openMeteoClient: openmeteo.NewClient(),
+		mapScraper:      mapscraper.NewClient(),
 	}
 }
 
@@ -61,6 +41,7 @@ func NewAnalyzerWithGroq(zoneStore *zones.Store, groqClient *GroqClient) *Analyz
 	return &Analyzer{
 		zoneStore:       zoneStore,
 		openMeteoClient: openmeteo.NewClient(),
+		mapScraper:      mapscraper.NewClient(),
 		groqClient:      groqClient,
 	}
 }
@@ -195,30 +176,16 @@ func (a *Analyzer) enrichWithZoneData(ctx context.Context, waypoints []Waypoint)
 			continue
 		}
 
-		// 2. Closest Semarang reference hotspot within 4.0 km
-		var bestHotspot *semarangHotspot
-		bestHotspotDist := 4.0
-		for idx := range semarangReferenceHotspots {
-			d := haversineDistance(lat, lon, semarangReferenceHotspots[idx].Lat, semarangReferenceHotspots[idx].Lon)
-			if d <= bestHotspotDist {
-				bestHotspotDist = d
-				bestHotspot = &semarangReferenceHotspots[idx]
-			}
+		// 2. Dynamic real-time Google Maps scraping + Open-Meteo Air Quality (Zero hardcoded hotspots)
+		scraper := a.mapScraper
+		if scraper == nil {
+			scraper = mapscraper.NewClient()
 		}
-
-		if bestHotspot != nil {
-			waypoints[i].ZoneID = bestHotspot.ID
-			waypoints[i].ZoneName = bestHotspot.Name
-			waypoints[i].AQI = bestHotspot.BaseAQI
-			waypoints[i].PM25 = bestHotspot.PM25
-			continue
-		}
-
-		// 3. Live Open-Meteo fallback (or clean Semarang suburban baseline)
-		aqi, pm25 := getLiveEnv(lat, lon)
-		waypoints[i].ZoneName = "Wilayah Semarang"
-		waypoints[i].AQI = aqi
-		waypoints[i].PM25 = pm25
+		scraped := scraper.ScrapeLocation(ctx, lat, lon, a.openMeteoClient)
+		waypoints[i].ZoneID = scraped.ZoneID
+		waypoints[i].ZoneName = scraped.ZoneName
+		waypoints[i].AQI = scraped.AQI
+		waypoints[i].PM25 = scraped.PM25
 	}
 }
 
