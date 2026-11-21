@@ -254,7 +254,7 @@ func GoogleLogin(w http.ResponseWriter, r *http.Request, c *firebase.Clients) {
 	updates := make(map[string]any)
 	if req.Name != nil {
 		cleanName := strings.TrimSpace(*req.Name)
-		if cleanName != "" {
+		if cleanName != "" && (profile.Name == "" || req.Usia != nil) {
 			updates["name"] = cleanName
 			profile.Name = cleanName
 			if _, err := c.Auth.UpdateUser(ctx, uid, (&auth.UserToUpdate{}).DisplayName(cleanName)); err != nil {
