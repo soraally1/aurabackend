@@ -50,6 +50,25 @@ func StartSession(w http.ResponseWriter, r *http.Request, c *firebase.Clients) {
 	now := time.Now().UTC()
 	sessionID := fmt.Sprintf("session_%s_%d", userID, now.UnixMilli())
 
+	startTs := req.StartLocation.Timestamp
+	if startTs.IsZero() {
+		startTs = now
+		req.StartLocation.Timestamp = now
+	}
+
+	var zoneStore *zones.Store
+	if c != nil && c.Firestore != nil {
+		zoneStore = zones.NewStore(c.Firestore, c.Config.ZonesCollection)
+	}
+	wpAnalyzer := tracking.NewAnalyzer(zoneStore)
+	initialWaypoints := wpAnalyzer.ProcessWaypoints(r.Context(), []tracking.Waypoint{
+		{
+			Latitude:  req.StartLocation.Latitude,
+			Longitude: req.StartLocation.Longitude,
+			Timestamp: startTs,
+		},
+	})
+
 	session := &tracking.Session{
 		ID:            sessionID,
 		UserID:        userID,
@@ -57,7 +76,7 @@ func StartSession(w http.ResponseWriter, r *http.Request, c *firebase.Clients) {
 		Status:        "active",
 		StartedAt:     now,
 		StartLocation: req.StartLocation,
-		Waypoints:     []tracking.Waypoint{},
+		Waypoints:     initialWaypoints,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
@@ -215,6 +234,52 @@ func StopSession(w http.ResponseWriter, r *http.Request, c *firebase.Clients) {
 		return
 	}
 
+	// Ensure endLocation is also persisted in session.Waypoints if distant from last waypoint
+	if len(session.Waypoints) == 0 || geoutils.HaversineDistance(
+		session.Waypoints[len(session.Waypoints)-1].Latitude,
+		session.Waypoints[len(session.Waypoints)-1].Longitude,
+		req.EndLocation.Latitude,
+		req.EndLocation.Longitude,
+	) > 0.005 {
+		var zoneStore *zones.Store
+		if c != nil && c.Firestore != nil {
+			zoneStore = zones.NewStore(c.Firestore, c.Config.ZonesCollection)
+		}
+		wpAnalyzer := tracking.NewAnalyzer(zoneStore)
+		var prevAnchor *tracking.Waypoint
+		if len(session.Waypoints) > 0 {
+			last := session.Waypoints[len(session.Waypoints)-1]
+			prevAnchor = &last
+		} else {
+			startWp := tracking.Waypoint{
+				Latitude:  session.StartLocation.Latitude,
+				Longitude: session.StartLocation.Longitude,
+				Timestamp: session.StartedAt,
+			}
+			enrichedStart := wpAnalyzer.ProcessWaypointsWithContext(r.Context(), []tracking.Waypoint{startWp}, nil)
+			if len(enrichedStart) > 0 {
+				_, _ = store.AppendWaypoints(r.Context(), req.SessionID, enrichedStart)
+				session.Waypoints = append(session.Waypoints, enrichedStart...)
+				prevAnchor = &enrichedStart[0]
+			}
+		}
+
+		endTs := req.EndLocation.Timestamp
+		if endTs.IsZero() {
+			endTs = time.Now().UTC()
+		}
+		endWp := tracking.Waypoint{
+			Latitude:  req.EndLocation.Latitude,
+			Longitude: req.EndLocation.Longitude,
+			Timestamp: endTs,
+		}
+		enrichedEnd := wpAnalyzer.ProcessWaypointsWithContext(r.Context(), []tracking.Waypoint{endWp}, prevAnchor)
+		if len(enrichedEnd) > 0 {
+			_, _ = store.AppendWaypoints(r.Context(), req.SessionID, enrichedEnd)
+			session.Waypoints = append(session.Waypoints, enrichedEnd...)
+		}
+	}
+
 	stats := tracking.CalculateStats(session.Waypoints, session.StartedAt, req.EndLocation.Timestamp)
 	if len(session.Waypoints) == 0 {
 		distKm := geoutils.HaversineDistance(
@@ -324,6 +389,33 @@ func DailyHistory(w http.ResponseWriter, r *http.Request, c *firebase.Clients) {
 		waypoints := session.Waypoints
 		if waypoints == nil {
 			waypoints = make([]tracking.Waypoint, 0)
+		}
+		if len(waypoints) == 0 && (session.StartLocation.Latitude != 0 || session.StartLocation.Longitude != 0) {
+			waypoints = append(waypoints, tracking.Waypoint{
+				Latitude:       session.StartLocation.Latitude,
+				Longitude:      session.StartLocation.Longitude,
+				Timestamp:      session.StartedAt,
+				Classification: "outdoor",
+			})
+		}
+		if session.EndLocation != nil && (session.EndLocation.Latitude != 0 || session.EndLocation.Longitude != 0) {
+			if len(waypoints) == 0 || geoutils.HaversineDistance(
+				waypoints[len(waypoints)-1].Latitude,
+				waypoints[len(waypoints)-1].Longitude,
+				session.EndLocation.Latitude,
+				session.EndLocation.Longitude,
+			) > 0.005 {
+				endTs := session.EndLocation.Timestamp
+				if endTs.IsZero() && session.EndedAt != nil {
+					endTs = *session.EndedAt
+				}
+				waypoints = append(waypoints, tracking.Waypoint{
+					Latitude:       session.EndLocation.Latitude,
+					Longitude:      session.EndLocation.Longitude,
+					Timestamp:      endTs,
+					Classification: "outdoor",
+				})
+			}
 		}
 
 		var sessionStats tracking.SessionStats

@@ -20,11 +20,15 @@ type Hotspot struct {
 }
 
 var semarangHotspots = []Hotspot{
+	{Name: "Kawasan POJ City (Pearl of Java)", Lat: -6.9472, Lon: 110.3882, BaseAQI: 78, PM25: 24.5},
+	{Name: "Pantai Marina Semarang", Lat: -6.9488, Lon: 110.3895, BaseAQI: 80, PM25: 25.2},
+	{Name: "Kawasan Puri Anjasmoro", Lat: -6.9688, Lon: 110.3905, BaseAQI: 94, PM25: 32.0},
+	{Name: "Jalan Madukoro Raya", Lat: -6.9625, Lon: 110.3914, BaseAQI: 102, PM25: 35.8},
+	{Name: "Jalan Siliwangi - Kalibanteng", Lat: -6.9852, Lon: 110.3821, BaseAQI: 112, PM25: 40.2},
 	{Name: "Kawasan Industri Kaligawe", Lat: -6.9587, Lon: 110.4578, BaseAQI: 154, PM25: 61.2},
 	{Name: "Simpang Lima Semarang", Lat: -6.9893, Lon: 110.4229, BaseAQI: 132, PM25: 48.5},
 	{Name: "Bundaran Tugu Muda", Lat: -6.9840, Lon: 110.4093, BaseAQI: 125, PM25: 45.0},
 	{Name: "Simpang Peterongan", Lat: -6.9996, Lon: 110.4320, BaseAQI: 118, PM25: 42.5},
-	{Name: "Gerbang Tol Krapyak", Lat: -6.9850, Lon: 110.3600, BaseAQI: 142, PM25: 53.0},
 	{Name: "Kawasan Banyumanik - Setiabudi", Lat: -7.0650, Lon: 110.4180, BaseAQI: 95, PM25: 33.0},
 	{Name: "Kawasan RSUP Dr. Kariadi - Sutomo", Lat: -6.9934, Lon: 110.4087, BaseAQI: 88, PM25: 29.5},
 }
